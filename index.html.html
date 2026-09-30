@@ -1,0 +1,1748 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Атлас Мира — Интерактивная карта</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap');
+
+  :root {
+    --ink: #0a0e16;
+    --parchment: #d6c8a0;
+    --parchment-dark: #a89878;
+    --gold: #c8aa6e;          /* Hextech gold */
+    --gold-bright: #f0e6d2;   /* почти белое золото */
+    --gold-deep: #785a28;
+    --cyan: #0ac8b9;          /* акцент Hextech cyan */
+    --cyan-dark: #0a5c63;
+    --crimson: #c8412f;
+    --bg-deep: #010a13;       /* почти чёрный сине-зелёный */
+    --bg: #0a1428;
+    --panel: #0a1016;
+    --panel-edge: #463714;    /* тёмно-золотая кромка */
+    --panel-edge-bright: #785a28;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: 'EB Garamond', serif;
+    background: var(--bg-deep);
+    color: var(--parchment);
+    user-select: none;
+  }
+
+  /* ---- Layout ---- */
+  #app { position: fixed; inset: 0; display: flex; }
+  #canvas-wrap { position: relative; flex: 1; cursor: grab; overflow: hidden; background: var(--bg-deep); }
+  #canvas-wrap.dragging { cursor: grabbing; }
+  canvas { position: absolute; top: 0; left: 0; }
+
+  /* виньетка поверх карты — затемнение к краям для иммерсии */
+  #vignette {
+    position: absolute; inset: 0; z-index: 8; pointer-events: none;
+    background:
+      radial-gradient(ellipse 75% 75% at 50% 48%, transparent 55%, rgba(1,10,19,.55) 88%, rgba(1,10,19,.92) 100%);
+    mix-blend-mode: multiply;
+  }
+  /* тонкая золотая «рамка кадра» как в интерфейсе LoL */
+  #frame {
+    position: absolute; inset: 10px; z-index: 9; pointer-events: none;
+    border: 1px solid rgba(120,90,40,.35);
+    box-shadow: inset 0 0 0 1px rgba(10,200,185,.04);
+  }
+  #frame::before, #frame::after {
+    content:''; position:absolute; width:26px; height:26px; border:2px solid rgba(200,170,110,.5);
+  }
+  #frame::before { top:-2px; left:-2px; border-right:none; border-bottom:none; }
+  #frame::after  { bottom:-2px; right:-2px; border-left:none; border-top:none; }
+
+  /* ---- Top bar ---- */
+  #topbar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+    display: flex; align-items: center; gap: 16px;
+    padding: 18px 28px;
+    background: linear-gradient(180deg, rgba(1,10,19,.9), rgba(1,10,19,.4) 70%, transparent);
+    pointer-events: none;
+  }
+  #topbar > * { pointer-events: auto; }
+  .title {
+    font-family: 'Cinzel', serif; font-weight: 700; font-size: 24px;
+    letter-spacing: 4px; color: var(--gold-bright); text-transform: uppercase;
+    text-shadow: 0 0 22px rgba(200,170,110,.5);
+    cursor: pointer; border-bottom: 1px solid transparent; transition: all .2s;
+    max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .title:hover { color: #fff; border-bottom-color: var(--cyan); text-shadow: 0 0 22px rgba(10,200,185,.6); }
+  #title-input {
+    font-family: 'Cinzel', serif; font-weight: 700; font-size: 24px; letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--gold-bright); background: rgba(1,10,19,.95); border: 1px solid var(--gold);
+    border-radius: 2px; padding: 2px 10px; outline: none; width: 400px;
+  }
+  .crumb {
+    font-family: 'Cinzel', serif; font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--parchment-dark);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .crumb::before { content:''; width: 16px; height: 1px; background: var(--gold-deep); }
+  .crumb b { color: var(--gold); font-weight: 500; }
+  #search {
+    margin-left: auto;
+    background: rgba(1,10,19,.7); border: 1px solid var(--panel-edge);
+    color: var(--parchment); font-family: inherit; font-size: 15px;
+    padding: 8px 14px; border-radius: 2px; width: 210px; outline: none;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  #search:focus { border-color: var(--cyan); box-shadow: 0 0 12px rgba(10,200,185,.25); }
+  #search::placeholder { color: #8a7a5e; }
+
+  /* ---- Filter button + dropdown ---- */
+  #filter-btn {
+    display: flex; align-items: center; gap: 8px;
+    font-family: 'Cinzel', serif; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase;
+    background: rgba(1,10,19,.7); border: 1px solid var(--panel-edge);
+    color: var(--parchment); padding: 8px 16px; border-radius: 2px;
+    cursor: pointer; transition: all .2s;
+  }
+  #filter-btn:hover { border-color: var(--cyan); color: var(--gold-bright); }
+  #filter-btn.has-active { border-color: var(--gold); color: var(--gold); }
+  #filter-btn svg { width: 16px; height: 16px; }
+  #filter-btn .count {
+    font-size: 11px; background: var(--gold); color: #010a13;
+    border-radius: 9px; padding: 1px 7px; font-weight: 700;
+  }
+
+  #filter-menu {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 45;
+    width: 320px; max-width: 88vw; background: var(--panel);
+    border-right: 1px solid var(--panel-edge-bright);
+    box-shadow: 20px 0 60px rgba(0,0,0,.7);
+    display: flex; flex-direction: column;
+    transition: transform .4s cubic-bezier(.22,1,.36,1), opacity .3s;
+    overflow: hidden;
+  }
+  #filter-menu::after { /* золотая светящаяся кромка справа */
+    content:''; position:absolute; right:0; top:0; bottom:0; width:2px;
+    background: linear-gradient(180deg, transparent, var(--gold) 30%, var(--gold) 70%, transparent);
+    box-shadow: 0 0 14px rgba(200,170,110,.5);
+  }
+  #filter-menu.hidden { transform: translateX(-102%); opacity: 0; pointer-events: none; }
+  .fm-head {
+    padding: 18px 18px 14px; border-bottom: 1px solid var(--panel-edge-bright);
+    display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+    background: linear-gradient(180deg, #0d1a2a, #0a1016);
+  }
+  .fm-head span.fm-title {
+    font-family: 'Cinzel', serif; font-size: 16px; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--gold-bright);
+  }
+  .fm-close {
+    width: 30px; height: 30px; border-radius: 50%; cursor: pointer; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    color: var(--gold-bright); font-size: 16px; background: rgba(1,10,19,.6);
+    border: 1px solid var(--panel-edge-bright); transition: all .2s;
+  }
+  .fm-close:hover { color:#fff; border-color: var(--cyan); box-shadow: 0 0 10px rgba(10,200,185,.4); }
+  .fm-toggle-all {
+    font-family:'Cinzel',serif; font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--gold); cursor: pointer;
+    border: 1px solid var(--panel-edge-bright); border-radius: 2px; padding: 5px 12px;
+    transition: all .15s; margin: 12px 18px; flex-shrink: 0; text-align: center;
+  }
+  .fm-toggle-all:hover { border-color: var(--gold-bright); color: var(--parchment); }
+  .fm-row {
+    display: flex; align-items: center; gap: 11px;
+    padding: 11px 18px; cursor: pointer; transition: background .12s;
+    border-bottom: 1px solid rgba(58,46,31,.4);
+  }
+  .fm-row:last-child { border-bottom: none; }
+  .fm-row:hover { background: #12202f; }
+  .fm-icon {
+    width: 28px; height: 28px; flex-shrink: 0; display: flex;
+    align-items: center; justify-content: center;
+    border-radius: 50%; background: rgba(1,10,19,.7);
+    border: 1.5px solid currentColor;
+  }
+  .fm-icon svg { width: 16px; height: 16px; }
+  .fm-label { flex: 1; font-size: 15px; color: var(--parchment); }
+  .fm-check {
+    width: 19px; height: 19px; border-radius: 4px; flex-shrink: 0;
+    border: 1.5px solid var(--panel-edge); position: relative; transition: all .12s;
+  }
+  .fm-row.on .fm-check { background: var(--gold); border-color: var(--gold); }
+  .fm-row.on .fm-check::after {
+    content: '✓'; position: absolute; inset: 0; text-align: center;
+    line-height: 17px; color: #1c1712; font-size: 13px; font-weight: 700;
+  }
+  .fm-row.off .fm-label, .fm-row.off .fm-icon { opacity: .4; }
+  .fm-back {
+    padding: 11px 16px; cursor: pointer; font-family: 'Cinzel', serif;
+    font-size: 12px; letter-spacing: 1px; color: var(--gold);
+    border-bottom: 1px solid var(--panel-edge); transition: background .12s;
+  }
+  .fm-back:hover { background: #251d14; }
+
+  /* группы-аккордеон фильтров */
+  .fm-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .fm-group { border-bottom: 1px solid rgba(70,55,20,.4); }
+  .fm-gh {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 14px 18px; font-family:'Cinzel',serif; font-size: 13px; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--parchment); transition: background .12s;
+  }
+  .fm-gh:hover { background: #12202f; }
+  .fm-gh > span:first-child { flex: 1; }
+  .fm-gcount { background: var(--gold); color:#010a13; border-radius:9px; padding:0 7px; font-size:11px; font-weight:700; }
+  .fm-arrow { color: var(--gold); font-size: 11px; }
+  .fm-glist { background: rgba(1,10,19,.4); padding: 2px 0 6px; }
+  .fm-glist .fm-row { padding: 9px 18px; border-bottom: none; }
+  .fm-empty { padding: 10px 18px; font-size: 13px; font-style: italic; color: var(--parchment-dark); }
+  /* кастомный скроллбар */
+  .fm-scroll::-webkit-scrollbar { width: 8px; }
+  .fm-scroll::-webkit-scrollbar-thumb { background: var(--panel-edge-bright); border-radius: 4px; }
+  .fm-scroll::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---- Side panel (стиль карточки региона LoL) ---- */
+  #panel {
+    width: 400px; flex-shrink: 0; background: var(--panel);
+    border-left: 1px solid var(--panel-edge-bright);
+    display: flex; flex-direction: column;
+    box-shadow: -20px 0 60px rgba(0,0,0,.7);
+    transition: transform .45s cubic-bezier(.22,1,.36,1), opacity .35s;
+    position: relative;
+  }
+  #panel::before { /* золотая светящаяся кромка слева */
+    content:''; position:absolute; left:0; top:0; bottom:0; width:2px;
+    background: linear-gradient(180deg, transparent, var(--gold) 30%, var(--gold) 70%, transparent);
+    box-shadow: 0 0 14px rgba(200,170,110,.5);
+  }
+  #panel.closed { transform: translateX(402px); opacity: 0; pointer-events: none; }
+  .panel-hero {
+    position: relative; height: 168px; flex-shrink: 0; overflow: hidden;
+    background: linear-gradient(135deg, #0a1a2a, #050d16);
+    border-bottom: 1px solid var(--panel-edge-bright);
+  }
+  .panel-hero img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .85; }
+  .panel-hero .hero-fade {
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, transparent 30%, rgba(10,16,22,.4) 70%, var(--panel) 100%);
+  }
+  .panel-hero.empty {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--gold-deep); font-family: 'Cinzel', serif; font-size: 40px; letter-spacing: 4px;
+  }
+  .panel-head {
+    padding: 16px 26px 14px; position: relative;
+    margin-top: -44px; z-index: 2;
+  }
+  #panel-close {
+    position: absolute; top: 14px; right: 14px; z-index: 10;
+    width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--gold-bright); font-size: 18px; line-height: 1;
+    background: rgba(1,10,19,.7); border: 1px solid var(--panel-edge-bright); transition: all .2s;
+  }
+  #panel-close:hover { color: #fff; border-color: var(--cyan); box-shadow: 0 0 12px rgba(10,200,185,.4); }
+  .panel-type {
+    font-family: 'Cinzel', serif; font-size: 11px; letter-spacing: 2.5px;
+    text-transform: uppercase; color: var(--cyan); margin-bottom: 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel-type .dot { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+  .panel-name {
+    font-family: 'Cinzel', serif; font-size: 28px; font-weight: 700;
+    color: var(--gold-bright); line-height: 1.05;
+    text-shadow: 0 2px 12px rgba(0,0,0,.6);
+  }
+  .panel-name::after {
+    content:''; display:block; width:44px; height:2px; margin-top:10px;
+    background: linear-gradient(90deg, var(--gold), transparent);
+  }
+  .panel-body { padding: 8px 26px 16px; overflow-y: auto; flex: 1; }
+  .panel-body p { font-size: 16px; line-height: 1.6; color: var(--parchment); margin-bottom: 14px; }
+  .panel-body textarea, .panel-body input.edit, .panel-body select {
+    width: 100%; background: var(--bg-deep); border: 1px solid var(--panel-edge);
+    color: var(--parchment); font-family: inherit; font-size: 15px;
+    padding: 9px; border-radius: 2px; margin-bottom: 10px; outline: none; transition: border-color .2s;
+  }
+  .panel-body textarea:focus, .panel-body input.edit:focus, .panel-body select:focus { border-color: var(--cyan); }
+  .panel-body textarea { min-height: 110px; resize: vertical; }
+  .panel-body label { font-family:'Cinzel',serif; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--cyan); display: block; margin-bottom: 5px; }
+  .field { margin-bottom: 14px; }
+  .map-preview {
+    width: 100%; border-radius: 2px; overflow: hidden; margin-bottom: 16px;
+    border: 1px solid var(--panel-edge); background: var(--bg-deep);
+  }
+  .map-preview img { width: 100%; display: block; }
+  .map-preview.empty {
+    padding: 24px 14px; text-align: center; font-size: 13px; font-style: italic;
+    color: var(--parchment-dark); line-height: 1.5;
+  }
+  .panel-foot { padding: 16px 26px; border-top: 1px solid var(--panel-edge); display: flex; gap: 10px; }
+
+  .btn {
+    font-family: 'Cinzel', serif; font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase;
+    padding: 11px 14px; border-radius: 2px; cursor: pointer; border: 1px solid var(--panel-edge-bright);
+    background: transparent; color: var(--gold); transition: all .2s; flex: 1; text-align: center;
+  }
+  .btn:hover { border-color: var(--gold-bright); color: var(--gold-bright); box-shadow: inset 0 0 12px rgba(200,170,110,.12); }
+  .btn.gold {
+    background: linear-gradient(180deg, #c8aa6e, #a07d3a); color: #010a13; border-color: var(--gold-bright); font-weight: 700;
+  }
+  .btn.gold:hover { background: linear-gradient(180deg, #e4c88f, #c8aa6e); box-shadow: 0 0 16px rgba(200,170,110,.4); }
+  .btn.danger { color: var(--crimson); border-color: rgba(200,65,47,.5); }
+  .btn.party-on { color:#1c1712; background: linear-gradient(180deg,#f7d774,#e0b94e); border-color:#f7d774; box-shadow:0 0 14px rgba(240,199,94,.45); }
+  .btn.danger:hover { border-color: var(--crimson); color: #ff7a68; box-shadow: inset 0 0 12px rgba(200,65,47,.15); }
+
+  /* ---- Floating controls ---- */
+  #controls {
+    position: absolute; bottom: 26px; left: 26px; z-index: 20;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .ctrl {
+    width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
+    background: rgba(1,10,19,.75); border: 1px solid var(--panel-edge-bright);
+    color: var(--gold); font-size: 20px; display: flex; align-items: center; justify-content: center;
+    font-family: 'Cinzel', serif; transition: all .2s; backdrop-filter: blur(2px);
+  }
+  .ctrl:hover { border-color: var(--cyan); color: var(--gold-bright); box-shadow: 0 0 14px rgba(10,200,185,.35); transform: translateY(-1px); }
+  .ctrl.active { background: linear-gradient(180deg, var(--gold), var(--gold-deep)); color: #010a13; border-color: var(--gold-bright); }
+  #goparty { color:#f7d774; border-color:rgba(247,215,116,.55); }
+  #goparty:hover { background:linear-gradient(180deg,#f7d774,#e0b94e); color:#1c1712; box-shadow:0 0 14px rgba(240,199,94,.5); }
+
+  #hint {
+    position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+    z-index: 15; font-family:'Cinzel',serif; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--parchment-dark);
+    background: rgba(1,10,19,.7); padding: 8px 18px; border-radius: 2px;
+    border: 1px solid var(--panel-edge); pointer-events: none; transition: opacity .4s;
+    backdrop-filter: blur(2px);
+  }
+
+  .badge { display:inline-block; font-family:'Cinzel',serif; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:var(--cyan); border:1px solid var(--cyan-dark); border-radius:2px; padding:3px 9px; margin-bottom:12px;}
+
+  /* блок атрибутов локации */
+  .attrs { margin-bottom: 16px; }
+  .attr {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 9px 0; border-bottom: 1px solid rgba(70,55,20,.4);
+  }
+  .attr:last-child { border-bottom: none; }
+  .attr-ico {
+    width: 22px; height: 22px; flex-shrink: 0; color: var(--gold); margin-top: 1px;
+  }
+  .attr-ico svg { width: 100%; height: 100%; }
+  .attr-text { flex: 1; }
+  .attr-label {
+    font-family:'Cinzel',serif; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--cyan); margin-bottom: 2px;
+  }
+  .attr-val { font-size: 15px; color: var(--parchment); line-height: 1.35; }
+  .attr-val .chip-r {
+    display:inline-block; background:rgba(10,200,185,.1); border:1px solid var(--cyan-dark);
+    border-radius:2px; padding:1px 8px; margin:2px 4px 2px 0; font-size:13px; color:var(--gold-bright);
+  }
+  /* сводка вложенных локаций */
+  .sub-list { display:flex; flex-wrap:wrap; gap:7px; margin-bottom:6px; }
+  .sub-chip {
+    display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--parchment);
+    background:rgba(1,10,19,.5); border:1px solid var(--panel-edge); border-radius:3px; padding:4px 9px;
+  }
+  .sub-ico { width:15px; height:15px; display:inline-flex; }
+  .sub-ico svg { width:100%; height:100%; }
+  /* поля ввода нескольких рас */
+  .races-edit { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; }
+  .race-tag {
+    display:flex; align-items:center; gap:5px; background:var(--bg-deep);
+    border:1px solid var(--panel-edge); border-radius:2px; padding:4px 8px; font-size:13px;
+  }
+  .race-tag b { cursor:pointer; color:var(--crimson); font-size:15px; line-height:1; }
+  .race-add { display:flex; gap:6px; }
+  .race-add input { margin-bottom:0 !important; }
+  .race-add button {
+    flex-shrink:0; background:var(--bg-deep); border:1px solid var(--panel-edge-bright);
+    color:var(--gold); border-radius:2px; padding:0 12px; cursor:pointer; font-size:18px;
+  }
+
+  /* свечение пульсации для подсветки выбранной точки делается на canvas */
+
+  /* ============ Мобильная адаптация ============ */
+  @media (max-width: 760px) {
+    /* панель остаётся боковой, но overlay поверх карты (не отжимает её) */
+    #panel {
+      position: absolute; top: 0; right: 0; bottom: 0; left: auto;
+      width: 86vw; max-width: 360px; z-index: 40;
+      transition: transform .4s cubic-bezier(.22,1,.36,1), opacity .3s;
+    }
+    #panel.closed { transform: translateX(102%); opacity: 0; }
+    .panel-hero { height: 140px; }
+    #panel-close { top: 12px; right: 12px; }
+
+    /* топбар компактнее */
+    #topbar { padding: 12px 14px; gap: 10px; flex-wrap: wrap; }
+    .title { font-size: 19px; letter-spacing: 2px; }
+    #search { width: 130px; padding: 6px 10px; font-size: 14px; }
+    #filter-btn span:not(.count) { display: none; } /* оставляем только иконку */
+    #filter-btn { padding: 8px 10px; }
+
+    /* кнопки управления — внизу слева, вертикально */
+    #controls { flex-direction: column; bottom: 18px; top: auto; left: 14px; }
+    .ctrl { width: 42px; height: 42px; font-size: 18px; }
+
+    #hint { display: none; }
+    #frame { inset: 5px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="canvas-wrap">
+    <canvas id="map"></canvas>
+    <div id="vignette"></div>
+    <div id="frame"></div>
+
+    <div id="topbar">
+      <span class="title" id="world-title" title="Нажмите, чтобы переименовать мир">ATLAS</span>
+      <span class="crumb" id="crumb" style="display:none"></span>
+      <span id="back-world" title="На уровень выше" style="display:none; cursor:pointer; font-family:'Cinzel',serif; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:var(--gold); border:1px solid var(--panel-edge-bright); border-radius:2px; padding:6px 12px;">‹ Назад</span>
+      <input id="search" placeholder="Поиск локаций…" autocomplete="off">
+      <div id="filter-btn" title="Фильтры">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+        <span>Фильтры</span>
+        <span class="count" id="filter-count"></span>
+      </div>
+    </div>
+
+    <div id="filter-menu" class="hidden"></div>
+
+    <div id="controls">
+      <div class="ctrl" id="zoomin" title="Приблизить">+</div>
+      <div class="ctrl" id="zoomout" title="Отдалить">–</div>
+      <div class="ctrl" id="recenter" title="Ко всему миру">⌂</div>
+      <div class="ctrl" id="addmode" title="Добавить маркер">✚</div>
+      <div class="ctrl" id="goparty" title="К текущей локации партии" style="display:none">★</div>
+    </div>
+    <input type="file" id="mapfile" accept="image/*" style="display:none">
+
+    <div id="hint">Клик по точке — описание · Название сверху — о карте · Колесо — зум · 2× клик — войти</div>
+  </div>
+
+  <div id="panel" class="closed">
+    <div id="panel-close" title="Закрыть">✕</div>
+    <div class="panel-hero" id="p-hero"></div>
+    <div class="panel-head">
+      <div class="panel-type" id="p-type"></div>
+      <div class="panel-name" id="p-name"></div>
+    </div>
+    <div class="panel-body" id="p-body"></div>
+    <div class="panel-foot" id="p-foot"></div>
+  </div>
+</div>
+
+<script>
+/* =========================================================
+   АТЛАС МИРА — интерактивная карта DnD
+   Один файл. Сохранение в localStorage.
+   ========================================================= */
+
+const cvs = document.getElementById('map');
+const ctx = cvs.getContext('2d');
+const wrap = document.getElementById('canvas-wrap');
+
+/* ---------- Типы локаций ---------- */
+const TYPES = {
+  region:    { name:'Регион / Держава',    color:'#c8aa6e', icon:'region' },
+  wildlands: { name:'Дикие земли',         color:'#7a8a5a', icon:'wild' },
+  ocean:     { name:'Океан / Великое море',color:'#3a7da8', icon:'ocean' },
+  range:     { name:'Великий хребет',      color:'#9a9088', icon:'range' },
+  wasteland: { name:'Пустошь',             color:'#b08850', icon:'waste' },
+  anomaly:   { name:'Разлом / Аномалия',   color:'#a060c8', icon:'rift' },
+  capital:   { name:'Столица',             color:'#f0c75e', icon:'crown' },
+  city:      { name:'Город',               color:'#c8aa6e', icon:'tower' },
+  village:   { name:'Деревня',             color:'#a89878', icon:'house' },
+  fort:      { name:'Форт',                color:'#b08d57', icon:'fort' },
+  outpost:   { name:'Аванпост',            color:'#9d8a6a', icon:'gate' },
+  port:      { name:'Порт',                color:'#4a9dc8', icon:'anchor' },
+  camp:      { name:'Лагерь',              color:'#c08a4a', icon:'tent' },
+  merchant:  { name:'Торговец',            color:'#e0b94e', icon:'coin' },
+  church:    { name:'Церковь',             color:'#d8d0e0', icon:'cross' },
+  tavern:    { name:'Таверна',             color:'#cf9b5a', icon:'mug' },
+  barracks:  { name:'Казарма',             color:'#9aa4b0', icon:'knight' },
+  guild:     { name:'Гильдия',             color:'#bfa46e', icon:'scroll' },
+  forest:    { name:'Лес',                 color:'#5a9d6a', icon:'tree' },
+  sea:       { name:'Море',                color:'#4a9dc8', icon:'waves' },
+  lake:      { name:'Озеро',               color:'#5ab0c8', icon:'lake' },
+  mountains: { name:'Горы',                color:'#9a9088', icon:'mountains' },
+  desert:    { name:'Пустыня',             color:'#d9b56a', icon:'desert' },
+  swamp:     { name:'Болото',              color:'#6a8a5a', icon:'swamp' },
+  shrine:    { name:'Святилище',           color:'#d8c878', icon:'shrine' },
+  mine:      { name:'Шахта',               color:'#8a7a6a', icon:'pick' },
+  ruin:      { name:'Руины',               color:'#9d8fc8', icon:'ruin' },
+  dungeon:   { name:'Подземелье',          color:'#c8412f', icon:'dragon' },
+  battlefield:{name:'Поле боя',            color:'#b0503a', icon:'banner' },
+  contested: { name:'Спорная территория',  color:'#d06a2f', icon:'swords' },
+  // --- внутренние точки (уровень 3) ---
+  palace:    { name:'Дворец / Ратуша',     color:'#f0c75e', icon:'palace' },
+  market:    { name:'Рынок',               color:'#e0b94e', icon:'market' },
+  smithy:    { name:'Кузница',             color:'#c87a4a', icon:'anvil' },
+  library:   { name:'Библиотека',          color:'#bfa46e', icon:'book' },
+  prison:    { name:'Тюрьма',              color:'#8a8a92', icon:'bars' },
+  house:     { name:'Жилой дом',           color:'#a89878', icon:'home' },
+  docks:     { name:'Доки',                color:'#4a9dc8', icon:'anchor' },
+  gatehouse: { name:'Застава / Ворота',    color:'#9d8a6a', icon:'gate' },
+  garden:    { name:'Сад / Парк',          color:'#5a9d6a', icon:'flower' },
+  graveyard: { name:'Кладбище',            color:'#9a9aa0', icon:'grave' },
+  arena:     { name:'Арена',               color:'#c87a4a', icon:'arena' },
+  lab:       { name:'Лаборатория мага',    color:'#9d8fc8', icon:'flask' },
+  altar:     { name:'Алтарь / Святыня',    color:'#d8c878', icon:'altar' },
+  passage:   { name:'Тайный проход',       color:'#8a8a92', icon:'door' },
+  vault:     { name:'Сокровищница',        color:'#f0c75e', icon:'chest' },
+  lair:      { name:'Логово',              color:'#c8412f', icon:'fang' },
+};
+
+/* Категории типов — определяют, какие поля показываются у локации.
+   settlement — населённые; nature — природные/биомы; danger — опасные; conflict — конфликтные. */
+const CATEGORY = {
+  // --- уровень 1 (мир) ---
+  region:'realm',
+  wildlands:'wildmap', ocean:'wildmap', range:'wildmap', wasteland:'wildmap',
+  anomaly:'anomaly_cat',
+  // --- уровень 2 ---
+  capital:'settlement', city:'settlement', village:'settlement',
+  fort:'settlement', outpost:'settlement', port:'settlement', camp:'settlement',
+  forest:'nature', sea:'nature', lake:'nature', mountains:'nature', desert:'nature', swamp:'nature', shrine:'nature',
+  ruin:'danger', dungeon:'danger', mine:'danger',
+  contested:'conflict',
+  // --- внутренние точки (уровень 3) ---
+  merchant:'venue', tavern:'venue', smithy:'venue', market:'venue', library:'venue', lab:'venue',
+  palace:'authority', guild:'authority', prison:'authority',
+  barracks:'military', gatehouse:'military', arena:'military',
+  church:'sacred', altar:'sacred', graveyard:'sacred',
+  house:'residential', garden:'residential', docks:'residential',
+  battlefield:'interior_danger', lair:'interior_danger', vault:'interior_danger', passage:'interior_danger',
+};
+function catOf(type){ return CATEGORY[type] || 'settlement'; }
+
+/* Наборы полей по категориям. key — имя свойства, label — подпись, icon — иконка, multi — список. */
+const FIELD_SCHEMA = {
+  // --- категории уровня 1 ---
+  realm: [
+    { key:'power',     label:'Правящая держава',  icon:'ruler' },
+    { key:'capitalName',label:'Столица',          icon:'crown' },
+    { key:'races',     label:'Господствующие расы',icon:'races', multi:true },
+    { key:'government',label:'Государственный строй',icon:'lore' },
+    { key:'religion',  label:'Основная религия',  icon:'religion' },
+    { key:'population',label:'Население / размер', icon:'race' },
+    { key:'climate',   label:'Климатическая зона', icon:'climate' },
+  ],
+  wildmap: [
+    { key:'climate',   label:'Климат / характер', icon:'climate' },
+    { key:'danger',    label:'Опасность',         icon:'danger' },
+    { key:'creatures', label:'Что обитает',       icon:'creatures', multi:true },
+    { key:'resources', label:'Ресурсы',           icon:'resource', multi:true },
+  ],
+  anomaly_cat: [
+    { key:'threat',    label:'Тип угрозы',        icon:'danger' },
+    { key:'origin',    label:'Происхождение',     icon:'lore' },
+    { key:'effects',   label:'Проявления',        icon:'creatures', multi:true },
+  ],
+  settlement: [
+    { key:'ruler',     label:'Правители',         icon:'ruler' },
+    { key:'race',      label:'Основная раса',     icon:'race' },
+    { key:'races',     label:'Доп. расы',         icon:'races', multi:true },
+    { key:'alignment', label:'Мировоззрение',     icon:'alignment' },
+    { key:'religion',  label:'Религия',           icon:'religion' },
+  ],
+  nature: [
+    { key:'climate',   label:'Биом / климат',     icon:'climate' },
+    { key:'danger',    label:'Опасность',         icon:'danger' },
+    { key:'creatures', label:'Обитающие существа',icon:'creatures', multi:true },
+    { key:'resources', label:'Ресурсы',           icon:'resource', multi:true },
+  ],
+  danger: [
+    { key:'threat',    label:'Уровень угрозы',    icon:'danger' },
+    { key:'creatures', label:'Населяющие твари',  icon:'creatures', multi:true },
+    { key:'loot',      label:'Добыча / сокровища',icon:'resource', multi:true },
+    { key:'lore',      label:'История',           icon:'lore' },
+  ],
+  conflict: [
+    { key:'sides',     label:'Враждующие стороны',icon:'swords2', multi:true },
+    { key:'cause',     label:'Причина конфликта', icon:'lore' },
+    { key:'threat',    label:'Уровень угрозы',    icon:'danger' },
+  ],
+  // --- категории уровня 3 ---
+  venue: [   // заведения и услуги
+    { key:'owner',    label:'Владелец',          icon:'ruler' },
+    { key:'goods',    label:'Товары / услуги',   icon:'resource', multi:true },
+    { key:'quality',  label:'Цены / качество',   icon:'coin2' },
+    { key:'hours',    label:'Часы работы',       icon:'clock' },
+  ],
+  authority: [   // власть и администрация
+    { key:'owner',    label:'Управляющий',       icon:'ruler' },
+    { key:'function', label:'Назначение',        icon:'lore' },
+    { key:'guard',    label:'Охрана',            icon:'shieldf' },
+    { key:'access',   label:'Доступ',            icon:'key' },
+  ],
+  military: [   // военные объекты
+    { key:'owner',    label:'Командир',          icon:'ruler' },
+    { key:'garrison', label:'Гарнизон',          icon:'creatures' },
+    { key:'arms',     label:'Вооружение',        icon:'swords2', multi:true },
+  ],
+  sacred: [   // священные места
+    { key:'religion', label:'Божество / культ',  icon:'religion' },
+    { key:'owner',    label:'Служитель',         icon:'ruler' },
+    { key:'relics',   label:'Реликвии',          icon:'resource', multi:true },
+  ],
+  residential: [   // жилое и бытовое
+    { key:'owner',    label:'Владелец / жители', icon:'race' },
+    { key:'notes',    label:'Заметки',           icon:'lore' },
+  ],
+  interior_danger: [   // опасные точки внутри локаций
+    { key:'threat',    label:'Уровень угрозы',   icon:'danger' },
+    { key:'creatures', label:'Обитатели',        icon:'creatures', multi:true },
+    { key:'loot',      label:'Добыча',           icon:'resource', multi:true },
+    { key:'traps',     label:'Ловушки',          icon:'danger', multi:true },
+  ],
+};
+function fieldsFor(type){ return FIELD_SCHEMA[catOf(type)] || []; }
+
+/* Уровни карты и допустимые типы на каждом */
+const LEVEL_TYPES = {
+  1: ['region','wildlands','ocean','range','wasteland','anomaly'],
+  2: ['capital','city','village','fort','outpost','port','camp','forest','sea','lake','mountains','desert','swamp','shrine','mine','ruin','dungeon','contested'],
+  3: ['merchant','tavern','smithy','market','library','lab','palace','guild','prison','barracks','gatehouse','arena','church','altar','graveyard','house','garden','docks','battlefield','lair','vault','passage'],
+};
+function allowedTypes(level){ return LEVEL_TYPES[level] || LEVEL_TYPES[2]; }
+function defaultType(level){ return allowedTypes(level)[0]; }
+
+/* SVG-иконки типов — единый источник для меню фильтров, панели и маркеров на canvas. */
+function typeSVGPath(icon){
+  switch(icon){
+    case 'region':  return '<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 3"/>';
+    case 'crown':   return '<path d="M4 8l3.5 3 4.5-6 4.5 6 3.5-3-1.5 10h-13z" fill="currentColor"/>';
+    case 'tower':   return '<path d="M8 3h8v3l-1 1v13H9V7L8 6z" fill="currentColor"/><rect x="10.5" y="11" width="3" height="5" fill="#010a13"/>';
+    case 'house':   return '<path d="M12 3l9 8h-3v9H6v-9H3z" fill="currentColor"/>';
+    case 'fort':    return '<path d="M3 8h3V5h3v3h2.5V5h3v3H20v12H3z" fill="currentColor"/><rect x="10" y="13" width="4" height="7" fill="#010a13"/>';
+    case 'gate':    return '<rect x="4" y="5" width="16" height="15" fill="currentColor"/><path d="M8 20V11a4 4 0 0 1 8 0v9" fill="#010a13"/><line x1="12" y1="7" x2="12" y2="20" stroke="currentColor" stroke-width="1.4"/>';
+    case 'anchor':  return '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.4"/><line x1="12" y1="7.4" x2="12" y2="20"/><path d="M5 14a7 7 0 0 0 14 0"/></g>';
+    case 'coin':    return '<circle cx="12" cy="12" r="9" fill="currentColor"/><circle cx="12" cy="12" r="6" fill="none" stroke="#010a13" stroke-width="1.4"/><text x="12" y="16" text-anchor="middle" font-size="9" fill="#010a13" font-family="serif">¤</text>';
+    case 'cross':   return '<path d="M10 3h4v6h6v4h-6v8h-4v-8H4V9h6z" fill="currentColor"/>';
+    case 'mug':     return '<path d="M6 7h10v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z" fill="currentColor"/><path d="M16 9h3a2 2 0 0 1 0 5h-3" fill="none" stroke="currentColor" stroke-width="2"/><rect x="6" y="7" width="10" height="2.4" fill="#010a13"/>';
+    case 'knight':  return '<path d="M7 21c0-6 1-9 4-11l-1-2 3-1 1 2c2 2 3 5 3 12z" fill="currentColor"/><circle cx="13" cy="6" r="1.2" fill="#010a13"/>';
+    case 'scroll':  return '<rect x="6" y="4" width="12" height="16" rx="2" fill="currentColor"/><line x1="9" y1="9" x2="15" y2="9" stroke="#010a13" stroke-width="1.3"/><line x1="9" y1="12" x2="15" y2="12" stroke="#010a13" stroke-width="1.3"/><line x1="9" y1="15" x2="13" y2="15" stroke="#010a13" stroke-width="1.3"/>';
+    case 'tree':    return '<path d="M12 2l5 8h-3l4 7H6l4-7H7z" fill="currentColor"/><rect x="11" y="16" width="2" height="5" fill="currentColor"/>';
+    case 'waves':   return '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/><path d="M3 15c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></g>';
+    case 'ruin':    return '<rect x="3" y="9" width="3.2" height="11" fill="currentColor"/><rect x="10.4" y="5" width="3.2" height="15" fill="currentColor"/><rect x="17.8" y="11" width="3" height="9" fill="currentColor"/>';
+    case 'dragon':  return '<path d="M3 12l5-2 2-4 3 3 5-1-2 4 3 2-4 2 1 4-4-2-3 3-1-4-5-1 3-3z" fill="currentColor"/>';
+    case 'swords':  return '<g stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"><path d="M5 5l10 10M14 5l-3 3M5 14l3-3"/><path d="M19 5L9 15M10 5l3 3M19 14l-3-3"/></g>';
+    case 'tent':    return '<path d="M12 3L3 20h18z" fill="currentColor"/><path d="M12 9l-4 11h8z" fill="#010a13"/>';
+    case 'lake':    return '<ellipse cx="12" cy="14" rx="9" ry="5" fill="currentColor"/><path d="M7 13c1.5-1 2.5-1 4 0s2.5 1 4 0" fill="none" stroke="#010a13" stroke-width="1.3"/>';
+    case 'mountains':return '<path d="M2 20l6-12 4 7 3-5 7 10z" fill="currentColor"/>';
+    case 'desert':  return '<path d="M2 18c3-3 6-3 10 0s7 1 10 0v3H2z" fill="currentColor"/><circle cx="18" cy="7" r="3" fill="currentColor"/>';
+    case 'swamp':   return '<ellipse cx="12" cy="17" rx="9" ry="4" fill="currentColor"/><path d="M7 14c0-3 1-5 2-7M12 13c0-4 1-6 1-9M16 14c0-2 1-4 2-6" stroke="currentColor" stroke-width="1.6" fill="none"/>';
+    case 'shrine':  return '<path d="M4 8h16l-2-3H6z" fill="currentColor"/><rect x="6" y="8" width="2.5" height="12" fill="currentColor"/><rect x="15.5" y="8" width="2.5" height="12" fill="currentColor"/><rect x="4" y="18" width="16" height="2.5" fill="currentColor"/>';
+    case 'pick':    return '<path d="M3 7c5-3 13-3 18 0" fill="none" stroke="currentColor" stroke-width="2.4"/><rect x="11" y="6" width="2" height="15" fill="currentColor"/>';
+    case 'banner':  return '<rect x="5" y="3" width="2" height="18" fill="currentColor"/><path d="M7 4h11l-3 4 3 4H7z" fill="currentColor"/>';
+    case 'palace':  return '<path d="M3 20V9l3-2 3 2V5l3-2 3 2v2l3-2 3 2v11z" fill="currentColor"/><rect x="10.5" y="13" width="3" height="7" fill="#010a13"/>';
+    case 'market':  return '<path d="M3 9l1-4h16l1 4z" fill="currentColor"/><rect x="4" y="9" width="16" height="11" fill="currentColor"/><path d="M4 9v11M8 9v11M12 9v11M16 9v11M20 9v11" stroke="#010a13" stroke-width="1"/>';
+    case 'anvil':   return '<path d="M4 8h11a4 4 0 0 1-4 4H9v3h6v3H6v-3l1-3a5 5 0 0 1-3-4z" fill="currentColor"/>';
+    case 'book':    return '<path d="M5 4h6a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H5z" fill="currentColor"/><path d="M19 4h-6a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h6z" fill="currentColor" opacity=".75"/>';
+    case 'bars':    return '<rect x="3" y="4" width="18" height="16" fill="currentColor" opacity=".25"/><g stroke="currentColor" stroke-width="2"><line x1="7" y1="4" x2="7" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="17" y1="4" x2="17" y2="20"/></g>';
+    case 'home':    return '<path d="M12 4l8 7h-2v9h-4v-5h-4v5H6v-9H4z" fill="currentColor"/>';
+    case 'flower':  return '<circle cx="12" cy="9" r="2.2" fill="#010a13"/><g fill="currentColor"><circle cx="12" cy="5" r="2.4"/><circle cx="8" cy="9" r="2.4"/><circle cx="16" cy="9" r="2.4"/><circle cx="9.5" cy="12.5" r="2.4"/><circle cx="14.5" cy="12.5" r="2.4"/></g><rect x="11" y="14" width="2" height="6" fill="currentColor"/>';
+    case 'grave':   return '<path d="M7 21V10a5 5 0 0 1 10 0v11z" fill="currentColor"/><path d="M11 6h2v2h2v2h-2v3h-2v-3H9V8h2z" fill="#010a13"/>';
+    case 'arena':   return '<ellipse cx="12" cy="12" rx="9" ry="7" fill="none" stroke="currentColor" stroke-width="2.5"/><ellipse cx="12" cy="12" rx="4.5" ry="3" fill="currentColor"/>';
+    case 'flask':   return '<path d="M10 3h4v5l4 9a2 2 0 0 1-2 3H8a2 2 0 0 1-2-3l4-9z" fill="currentColor"/><rect x="9" y="3" width="6" height="1.8" fill="currentColor"/>';
+    case 'altar':   return '<rect x="5" y="14" width="14" height="6" fill="currentColor"/><path d="M11 4h2v3h3v2h-3v4h-2V9H8V7h3z" fill="currentColor"/>';
+    case 'door':    return '<rect x="6" y="3" width="12" height="18" rx="1" fill="currentColor"/><circle cx="14.5" cy="12" r="1.2" fill="#010a13"/>';
+    case 'chest':   return '<path d="M4 9a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v2H4z" fill="currentColor"/><rect x="4" y="11" width="16" height="9" fill="currentColor"/><rect x="10.5" y="10" width="3" height="4" fill="#010a13"/>';
+    case 'fang':    return '<path d="M5 4c3 6 3 10 7 16 4-6 4-10 7-16-4 2-10 2-14 0z" fill="currentColor"/>';
+    case 'wild':    return '<path d="M4 20c1-5 2-8 4-11M9 20c0-6 1-10 3-15M15 20c1-5 2-8 4-11M20 20H4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>';
+    case 'ocean':   return '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 7c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/><path d="M2 12c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/><path d="M2 17c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></g>';
+    case 'range':   return '<path d="M2 20l5-11 3 5 2-4 3 6 2-3 5 7z" fill="currentColor"/><path d="M7 9l1.6 2.8-1.4.5L5.4 14z" fill="#010a13" opacity=".5"/>';
+    case 'waste':   return '<path d="M2 19c3-2 5-2 7 0M2 14c4-1 7-1 10 0" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M15 20V8l3-2 3 2v12z" fill="currentColor"/><path d="M16 12l4 4M20 12l-4 4" stroke="#010a13" stroke-width="1"/>';
+    case 'rift':    return '<path d="M11 2l3 7-4 2 5 4-3 7 6-8-4-2 4-3z" fill="currentColor"/><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 3" opacity=".6"/>';
+    default:        return '<circle cx="12" cy="12" r="6" fill="currentColor"/>';
+  }
+}
+function typeSVG(icon){ return '<svg viewBox="0 0 24 24">'+typeSVGPath(icon)+'</svg>'; }
+
+/* Иконки атрибутов локации (правитель, раса и т.д.) */
+function fieldSVG(kind){
+  const s='fill="currentColor"';
+  switch(kind){
+    case 'ruler':    return '<svg viewBox="0 0 24 24" '+s+'><path d="M4 8l3.5 3 4.5-6 4.5 6 3.5-3-1.5 10h-13z"/></svg>'; // корона
+    case 'race':     return '<svg viewBox="0 0 24 24" '+s+'><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8z"/></svg>'; // человек
+    case 'races':    return '<svg viewBox="0 0 24 24" '+s+'><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z"/></svg>'; // плюс
+    case 'alignment':return '<svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"><path d="M5 5l10 10M14 5l-3 3M5 14l3-3"/><path d="M19 5L9 15M10 5l3 3M19 14l-3-3"/></g></svg>'; // мечи
+    case 'religion': return '<svg viewBox="0 0 24 24" '+s+'><path d="M12 3c-1 3-3 4-5 5 1 4 3 7 5 10 2-3 4-6 5-10-2-1-4-2-5-5z"/></svg>'; // сложенные руки (символично)
+    case 'climate':  return '<svg viewBox="0 0 24 24" '+s+'><path d="M7 16a4 4 0 1 1 1-7.9 5 5 0 0 1 9.6 1.4A3.5 3.5 0 0 1 17 16z"/></svg>'; // облако/климат
+    case 'danger':   return '<svg viewBox="0 0 24 24" '+s+'><path d="M12 2L1 21h22z"/><rect x="11" y="9" width="2" height="6" fill="#010a13"/><rect x="11" y="17" width="2" height="2" fill="#010a13"/></svg>'; // знак опасности
+    case 'creatures':return '<svg viewBox="0 0 24 24" '+s+'><path d="M5 10c0-3 3-5 7-5s7 2 7 5c0 2-1 3-2 4l1 4-3-2-3 1-3-1-3 2 1-4c-1-1-2-2-2-4z"/><circle cx="9.5" cy="10" r="1" fill="#010a13"/><circle cx="14.5" cy="10" r="1" fill="#010a13"/></svg>'; // монстр
+    case 'resource': return '<svg viewBox="0 0 24 24" '+s+'><path d="M12 2l3 6 6 1-4.5 4 1 6-5.5-3-5.5 3 1-6L3 9l6-1z"/></svg>'; // самоцвет/звезда-ресурс
+    case 'lore':     return '<svg viewBox="0 0 24 24" '+s+'><path d="M5 3h11l3 3v15H5z"/><line x1="8" y1="9" x2="16" y2="9" stroke="#010a13" stroke-width="1.3"/><line x1="8" y1="12" x2="16" y2="12" stroke="#010a13" stroke-width="1.3"/><line x1="8" y1="15" x2="13" y2="15" stroke="#010a13" stroke-width="1.3"/></svg>'; // свиток истории
+    case 'swords2':  return '<svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"><path d="M5 5l10 10M14 5l-3 3M5 14l3-3"/><path d="M19 5L9 15M10 5l3 3M19 14l-3-3"/></g></svg>'; // скрещённые мечи
+    case 'coin2':    return '<svg viewBox="0 0 24 24" '+s+'><circle cx="9" cy="11" r="6"/><circle cx="15" cy="13" r="6" opacity=".6"/></svg>'; // монеты (цены)
+    case 'clock':    return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'; // часы
+    case 'shieldf':  return '<svg viewBox="0 0 24 24" '+s+'><path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z"/></svg>'; // щит (охрана)
+    case 'key':      return '<svg viewBox="0 0 24 24" '+s+'><circle cx="7" cy="9" r="4"/><path d="M10 11l9 9M16 17l2-2M19 20l2-2" stroke="currentColor" stroke-width="2" fill="none"/></svg>'; // ключ (доступ)
+    default:         return '';
+  }
+}
+
+/* ---------- Стартовые данные (3 уровня) ---------- */
+const SEED = {
+  world: {
+    seed: 1337,
+    name: 'Известный мир',
+    desc: 'Земли, что простираются от Северных трактов до Островов Тумана. Каждый регион хранит свои тайны.',
+    locations: [
+      { id:'r1', x:0.32, y:0.40, type:'region', name:'Королевство Велгард', desc:'Сердце цивилизованных земель — реки, поля и белокаменные города.', power:'Дом Альдриков', capitalName:'Велгард', races:['Люди','Полуэльфы','Дворфы'], government:'Феодальная монархия', religion:'Культ Света', population:'~2 млн', climate:'Умеренный' },
+      { id:'r2', x:0.62, y:0.54, type:'region', name:'Северная Марка', desc:'Суровый край фьордов, лесов и древних руин у самого края известного мира.', power:'Совет Ярлов', capitalName:'Фростхейм', races:['Люди','Эльфы','Дроу'], government:'Союз кланов', religion:'Старая Вера', population:'~600 тыс.', climate:'Субарктический' },
+      { id:'w1', x:0.46, y:0.74, type:'wildlands', name:'Ничейные Топи', desc:'Дикие земли между державами, где не правит ни один трон.', climate:'Болотистый, туманный', danger:'Высокая', creatures:['Тролли','Болотные ведьмы'], resources:['Редкие травы','Торф'] },
+      { id:'o1', x:0.85, y:0.40, type:'ocean', name:'Море Тумана', desc:'Великое море на востоке, откуда приходят бури и легенды.', climate:'Штормовой', danger:'Высокая', creatures:['Левиафаны','Морские змеи'], resources:['Рыба','Жемчуг'] },
+      { id:'a1', x:0.20, y:0.66, type:'anomaly', name:'Звёздный Разлом', desc:'Трещина в ткани мира, оставшаяся после Падения звезды.', threat:'Катастрофический', origin:'Падение небесного тела в эпоху Раскола', effects:['Искажение магии','Временны́е аномалии','Порождения пустоты'] },
+    ],
+  },
+  details: {
+    // Уровень 2 — карта региона r1
+    r1: { name:'Королевство Велгард', desc:'Центральные земли королевства с его городами и деревнями.', locations:[
+      { id:'l1', x:0.40, y:0.40, type:'capital', name:'Велгард', desc:'Столица королевства, город белых башен на слиянии двух рек.', ruler:'Король Альдрик III', race:'Люди', races:['Полуэльфы'], alignment:'Законопослушный добрый', religion:'Культ Света' },
+      { id:'l2', x:0.62, y:0.30, type:'city', name:'Дунмар', desc:'Торговый узел северных трактов. Кузнечные гильдии и дымные таверны.', ruler:'Магистрат Дунмара', race:'Дворфы', races:['Люди'], alignment:'Нейтральный', religion:'Культ Кузни' },
+      { id:'l7', x:0.30, y:0.58, type:'village', name:'Брод Олены', desc:'Тихая деревушка у речного брода. Хороший эль и много слухов.', ruler:'Староста Бром', race:'Люди', races:[], alignment:'Нейтральный добрый', religion:'Культ Света' },
+    ] },
+    // Уровень 2 — карта региона r2
+    r2: { name:'Северная Марка', desc:'Дикие земли севера: порты, древние руины и тёмные подземелья.', locations:[
+      { id:'l3', x:0.55, y:0.45, type:'port', name:'Солёная Гавань', desc:'Крупнейший порт побережья. Отсюда уходят корабли к Островам Тумана.', ruler:'Гильдия мореходов', race:'Люди', races:['Полурослики','Тритоны'], alignment:'Хаотичный нейтральный', religion:'Морские божества' },
+      { id:'l4', x:0.28, y:0.62, type:'dungeon', name:'Чёрные Копи', desc:'Заброшенные гномьи шахты. Глубоко внизу что-то проснулось.', threat:'Смертельный', creatures:['Дуэргары','Тени'], loot:['Митриловая жила','Древний клинок'], lore:'Гномы копнули слишком глубоко и разбудили древнее зло.' },
+      { id:'l5', x:0.46, y:0.70, type:'ruin', name:'Руины Карн-Тул', desc:'Останки древней империи, поглощённой лесом.', threat:'Умеренный', creatures:['Костяные стражи'], loot:['Реликвии империи'], lore:'Столица павшей империи Карн, проклятая её последним императором.' },
+      { id:'l6', x:0.72, y:0.34, type:'forest', name:'Шёпчущий Лес', desc:'Древний лес, где деревья помнят первых эльфов.', climate:'Умеренный, влажный', danger:'Низкая', creatures:['Лесные духи','Друиды'], resources:['Древесина','Целебные травы'] },
+      { id:'l8', x:0.32, y:0.30, type:'mountains', name:'Пик Бурь', desc:'Высочайшая вершина севера, укрытая вечными грозами.', climate:'Альпийский, суровый', danger:'Высокая', creatures:['Грифоны','Горные тролли'], resources:['Железная руда','Самоцветы'] },
+      { id:'l9', x:0.60, y:0.68, type:'contested', name:'Кровавые Поля', desc:'Спорная земля, за которую веками льётся кровь.', sides:['Ярлы Севера','Королевство Велгард'], cause:'Контроль над переправой и торговым трактом', threat:'Высокий' },
+    ] },
+    // Уровень 3 — детальная карта столицы Велгард
+    l1: { name:'Велгард — План города', desc:'Столица раскинулась на холмах над рекой. Чем ближе к вершине — тем выше титулы.', locations:[
+      { id:'d1', x:0.5, y:0.28, type:'palace', name:'Королевский Дворец', desc:'Тронный зал и покои короля.', owner:'Король Альдрик III', function:'Резиденция короны и зал совета', guard:'Королевская гвардия', access:'Только по приглашению' },
+      { id:'d2', x:0.3, y:0.55, type:'market', name:'Рыночная площадь', desc:'Сердце торговли. Шумно с рассвета.', owner:'Купеческая гильдия', goods:['Снедь','Ткани','Зелья'], quality:'Средние цены', hours:'С рассвета до заката' },
+      { id:'d3', x:0.7, y:0.6, type:'guild', name:'Башня Магов', desc:'Гильдия чародеев. Закрыта для непосвящённых.', owner:'Архимаг Селена', function:'Обучение и контроль магии', guard:'Зачарованные стражи', access:'Только посвящённые' },
+      { id:'d5', x:0.5, y:0.32, type:'church', name:'Собор Света', desc:'Главный храм королевства.', religion:'Культ Света', owner:'Верховный жрец Мариус', relics:['Светоч Зари'] },
+      { id:'d6', x:0.2, y:0.34, type:'tavern', name:'Таверна «Старый дуб»', desc:'Где сходятся слухи всех трёх колец.', owner:'Хозяйка Грета', goods:['Эль','Жаркое','Ночлег'], quality:'Дёшево и сытно', hours:'Круглосуточно' },
+      { id:'d7', x:0.78, y:0.4, type:'smithy', name:'Кузница Торина', desc:'Лучшая сталь в королевстве.', owner:'Торин Железнобородый', goods:['Оружие','Доспехи','Подковы'], quality:'Дорого, но качественно', hours:'Днём' },
+    ] },
+  },
+  // Загруженные пользователем картинки карт (data-URL), ключ = id карты или 'world'
+  images: {}
+};
+
+/* ---------- Состояние ---------- */
+let DATA = load() || structuredClone(SEED);
+if(!DATA.images) DATA.images = {};   // совместимость со старыми сохранениями
+if(!DATA.title) DATA.title = 'ATLAS'; // название мира (заголовок)
+if(!('party' in DATA)) DATA.party = null; // метка текущей локации партии: { path:[...ids], id }
+const imgCache = {};                  // key -> HTMLImageElement (готовые к рисованию)
+let view = { x:0, y:0, scale:1 };      // текущее смещение/масштаб (анимируется)
+let camTarget = null;                   // целевое состояние камеры при «полёте»
+let camAnim = false;                    // идёт ли анимация
+let hoverId = null;                     // id точки под курсором
+let glowPhase = 0;                      // фаза пульсации свечения
+let currentMap = 'world';               // 'world' или id локации
+let navStack = [];                      // путь карт от мира: [] = мир(ур.1), [regId]=регион(ур.2), [regId,locId]=деталь(ур.3)
+function currentLevel(){ return navStack.length + 1; }
+// Имена карт в пути (для крошек)
+function navNames(){ return navStack.map(id=>{ const d=DATA.details[id]; return (d && d.name) || 'Локация'; }); }
+// Фильтры: { types:Set, <field>:Set }. Пустой Set = критерий не применяется.
+let filters = { types:new Set() };
+function filterSet(key){ if(!filters[key]) filters[key]=new Set(); return filters[key]; }
+function clearFilters(){ filters={ types:new Set() }; }
+let selected = null;
+let mode = null;                        // null | 'add'
+let panelMode = null;                   // 'loc' | 'map' — что показывает боковая панель
+let searchQ = '';
+let W=0, H=0, DPR=Math.min(devicePixelRatio||1, 2);
+
+/* ---------- Сохранение ---------- */
+function save(){
+  try { localStorage.setItem('dnd-atlas', JSON.stringify(DATA)); }
+  catch(e){ alert('Не удалось сохранить: возможно, картинки слишком большие для хранилища браузера. Попробуйте изображение поменьше.'); }
+}
+function load(){ try { return JSON.parse(localStorage.getItem('dnd-atlas')); } catch(e){ return null; } }
+
+/* ---------- Пользовательские картинки карт ---------- */
+// Возвращает готовый Image для текущей карты (или null). Кэширует декодирование.
+function getUserImage(key){
+  const url = DATA.images[key];
+  if(!url) return null;
+  if(imgCache[key] && imgCache[key].src===url) return imgCache[key];
+  const img = new Image();
+  img.onload = ()=>{ if(key===currentMap) refreshAspect(); draw(); }; // перерисовать после декодирования
+  img.src = url;
+  imgCache[key] = img;
+  return img;
+}
+
+/* ---------- Текущий набор локаций/дорог ---------- */
+function curr(){
+  if (currentMap==='world') return DATA.world;
+  if (!DATA.details[currentMap]) DATA.details[currentMap] = { name:'', desc:'', locations:[] };
+  return DATA.details[currentMap];
+}
+function locById(id){ return curr().locations.find(l=>l.id===id); }
+function worldName(){ return (DATA.world.name && DATA.world.name.trim()) || 'Известный мир'; }
+function updateCrumb(){
+  const el=document.getElementById('crumb');
+  el.style.display='';
+  el.style.cursor='pointer';
+  el.title='Описание этой карты';
+  el.onclick=openMapPanel;
+  if(currentLevel()===1){
+    el.innerHTML='<b>'+escapeHtml(worldName())+'</b>';
+  } else {
+    const names=navNames();
+    el.innerHTML = names.map((n,i)=> (i===names.length-1?'<b>':'')+escapeHtml(n)+(i===names.length-1?'</b>':'') ).join(' › ');
+  }
+}
+
+/* ---------- Процедурный фон карты ---------- */
+// детерминированный шум на основе seed
+function makeNoise(seed){
+  let s = seed>>>0;
+  const rnd = ()=>{ s = (s*1664525+1013904223)>>>0; return s/4294967296; };
+  const N=64, grid=[];
+  for(let i=0;i<N*N;i++) grid.push(rnd());
+  return (x,y)=>{ // bilinear-ish
+    const gx=x*(N-1), gy=y*(N-1);
+    const x0=Math.floor(gx), y0=Math.floor(gy);
+    const fx=gx-x0, fy=gy-y0;
+    const a=grid[(y0%N)*N+(x0%N)], b=grid[(y0%N)*N+((x0+1)%N)];
+    const c=grid[((y0+1)%N)*N+(x0%N)], d=grid[((y0+1)%N)*N+((x0+1)%N)];
+    const sx=fx*fx*(3-2*fx), sy=fy*fy*(3-2*fy);
+    return (a*(1-sx)+b*sx)*(1-sy)+(c*(1-sx)+d*sx)*sy;
+  };
+}
+let bgCache = {};   // кэш отрисованного фона по ключу карты+seed
+function buildBackground(key, seed){
+  if (bgCache[key]) return bgCache[key];
+  const SZ = 1600;
+  const off = document.createElement('canvas');
+  off.width=SZ; off.height=SZ;
+  const c = off.getContext('2d');
+  const n1=makeNoise(seed), n2=makeNoise(seed*7+13), n3=makeNoise(seed*31+5);
+  const img=c.createImageData(SZ,SZ), d=img.data;
+  for(let py=0;py<SZ;py++){
+    for(let px=0;px<SZ;px++){
+      const u=px/SZ, v=py/SZ;
+      // высота: несколько октав + радиальный спад к краям (остров/материк)
+      let h = n1(u*3,v*3)*0.6 + n2(u*7,v*7)*0.3 + n3(u*15,v*15)*0.1;
+      const dx=u-0.5, dy=v-0.5; const dist=Math.sqrt(dx*dx+dy*dy)*1.9;
+      h = h - dist*0.55 + 0.15;
+      let r,g,b;
+      if (h<0.18){ r=8;g=22;b=38; }             // глубокое море (тёмно-синее)
+      else if (h<0.30){ r=18;g=46;b=68; }       // мелководье
+      else if (h<0.34){ r=120;g=110;b=78; }     // берег
+      else if (h<0.55){ r=58;g=72;b=58; }        // равнины (приглушённый хвойный)
+      else if (h<0.72){ r=44;g=58;b=50; }        // леса
+      else if (h<0.85){ r=78;g=72;b=58; }        // холмы
+      else { r=120;g=116;b=110; }                // горы (холодный камень)
+      // лёгкое затемнение для текстуры
+      const t = n3(u*40,v*40)*0.14-0.07;
+      r=Math.max(0,Math.min(255,r+(r*t)));
+      g=Math.max(0,Math.min(255,g+(g*t)));
+      b=Math.max(0,Math.min(255,b+(b*t)));
+      const i=(py*SZ+px)*4; d[i]=r; d[i+1]=g; d[i+2]=b; d[i+3]=255;
+    }
+  }
+  c.putImageData(img,0,0);
+  // тёмный сине-чёрный оверлей по краям
+  const grd=c.createRadialGradient(SZ/2,SZ/2,SZ*0.22,SZ/2,SZ/2,SZ*0.72);
+  grd.addColorStop(0,'rgba(0,0,0,0)');
+  grd.addColorStop(1,'rgba(1,10,19,0.7)');
+  c.fillStyle=grd; c.fillRect(0,0,SZ,SZ);
+  bgCache[key]=off; return off;
+}
+
+/* ---------- Размеры ---------- */
+function resize(){
+  W = wrap.clientWidth; H = wrap.clientHeight;
+  if(!W || !H) return;   // защита от нулевых размеров на раннем рендере
+  cvs.width=Math.round(W*DPR); cvs.height=Math.round(H*DPR);
+  cvs.style.width=W+'px'; cvs.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  if(typeof refreshAspect==='function') refreshAspect();
+  if(typeof clampView==='function') clampView();
+  draw();
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', ()=>{ setTimeout(resize, 250); });
+if(window.visualViewport){ window.visualViewport.addEventListener('resize', resize); }
+
+/* ---------- Координаты: карта(0..1 x0..1) <-> экран ----------
+   Карта — прямоугольник с собственным соотношением сторон (mapAspect = ширина/высота).
+   Базовый размер подбирается так, чтобы карта заполняла экран целиком (cover).
+   view.scale/x/y задают дополнительный зум и свободное смещение. */
+let mapAspect = 1;   // соотношение сторон текущей карты (ш/в)
+
+// Базовый прямоугольник карты при scale=1 (cover экрана), без учёта view-смещения
+function baseRect(){
+  let bw, bh;
+  if (W/H > mapAspect){ bw = W; bh = W/mapAspect; }   // ограничено по ширине
+  else { bh = H; bw = H*mapAspect; }                  // ограничено по высоте
+  return { w:bw, h:bh };
+}
+function mapRect(){
+  const b = baseRect();
+  const w = b.w*view.scale, h = b.h*view.scale;
+  const ox = (W - w)/2 + view.x;
+  const oy = (H - h)/2 + view.y;
+  return { ox, oy, w, h };
+}
+function toScreen(lx,ly){
+  const r = mapRect();
+  return [ r.ox + lx*r.w, r.oy + ly*r.h ];
+}
+function toWorld(sx,sy){
+  const r = mapRect();
+  return [ (sx-r.ox)/r.w, (sy-r.oy)/r.h ];
+}
+
+// Пересчёт соотношения сторон при смене карты (картинка → её аспект, иначе аспект экрана)
+function refreshAspect(){
+  const url = DATA.images[currentMap];
+  if(url){
+    const img = getUserImage(currentMap);
+    if(img && img.complete && img.naturalWidth){ mapAspect = img.naturalWidth/img.naturalHeight; }
+    else { mapAspect = W/H; }   // до загрузки используем экран, потом onload перерисует
+  } else {
+    mapAspect = W/H;           // заглушка заполняет весь экран
+  }
+}
+
+/* ---------- Иконки маркеров ---------- */
+// Кэш растеризованных иконок: icon+color -> HTMLImageElement
+const iconImgCache = {};
+function getIconImage(icon, color){
+  const key=icon+'|'+color;
+  if(iconImgCache[key]) return iconImgCache[key];
+  const inner = typeSVGPath(icon).replace(/currentColor/g, color);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48">'+inner+'</svg>';
+  const img = new Image();
+  img.onload=()=>draw();
+  img.src = 'data:image/svg+xml;utf8,'+encodeURIComponent(svg);
+  iconImgCache[key]=img;
+  return img;
+}
+function drawIcon(x,y,type,r,glow,loc){
+  const t = TYPES[type]||TYPES.village;
+  ctx.save();
+  if(glow){ ctx.shadowColor=t.color; ctx.shadowBlur=22; }
+  ctx.translate(x,y);
+  // подложка-медальон
+  ctx.beginPath(); ctx.arc(0,0,r,0,7);
+  ctx.fillStyle='rgba(1,10,19,.9)'; ctx.fill();
+  ctx.lineWidth=2; ctx.strokeStyle=glow?'#f0e6d2':t.color; ctx.stroke();
+  ctx.shadowBlur=0;
+  // кастомная SVG-иконка региона, если загружена
+  let img;
+  if(loc && loc.iconSvg){
+    const ck='custom|'+loc.id;
+    if(iconImgCache[ck] && iconImgCache[ck].src===loc.iconSvg) img=iconImgCache[ck];
+    else { img=new Image(); img.onload=()=>draw(); img.src=loc.iconSvg; iconImgCache[ck]=img; }
+  } else {
+    img=getIconImage(t.icon, t.color);
+  }
+  if(img && img.complete && img.naturalWidth){
+    const s=r*1.35; ctx.drawImage(img, -s/2, -s/2, s, s);
+  } else {
+    ctx.fillStyle=t.color; ctx.beginPath(); ctx.arc(0,0,r*0.4,0,7); ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ---------- Главная отрисовка ---------- */
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // глубокий фон под картой
+  ctx.fillStyle='#010a13'; ctx.fillRect(0,0,W,H);
+
+  const m = curr();
+  const rect = mapRect();
+  const ox=rect.ox, oy=rect.oy, w=rect.w, h=rect.h;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(ox,oy,w,h); ctx.clip();
+  const userImg = getUserImage(currentMap);
+  if(userImg && userImg.complete && userImg.naturalWidth){
+    // картинка заполняет всю область карты (аспект области = аспекту картинки)
+    ctx.drawImage(userImg, ox,oy,w,h);
+  } else {
+    const seed = currentMap==='world' ? DATA.world.seed : (hashStr(currentMap)>>>0);
+    const bg = buildBackground(currentMap, seed);
+    ctx.drawImage(bg, ox,oy,w,h);
+  }
+  ctx.restore();
+  // рамка карты — тонкая золотая
+  ctx.strokeStyle='rgba(120,90,40,.5)'; ctx.lineWidth=2; ctx.strokeRect(ox,oy,w,h);
+
+  // маркеры
+  const baseR = Math.max(10, 12*Math.min(view.scale,2.2));
+  m.locations.forEach(l=>{
+    if(!passFilter(l)) return;
+    const found = searchQ && l.name.toLowerCase().includes(searchQ);
+    const dim = searchQ && !found;
+    const isSel = selected===l.id;
+    const isHover = hoverId===l.id;
+    const active2 = isSel || found;
+    const [x,y]=toScreen(l.x,l.y);
+    const r = baseR * (isSel?1.25 : isHover?1.12 : 1);
+    ctx.globalAlpha = dim?0.22:1;
+
+    // пульсирующее кольцо вокруг активной/hover точки
+    if(active2 || isHover){
+      const t = TYPES[l.type]||TYPES.village;
+      const pulse = active2 ? (0.5+0.5*Math.sin(glowPhase)) : 0.4;
+      ctx.save();
+      ctx.beginPath(); ctx.arc(x,y, r+6+pulse*5, 0, 7);
+      ctx.strokeStyle = hexA(t.color, 0.25+pulse*0.45); ctx.lineWidth=2; ctx.stroke();
+      if(active2){ ctx.beginPath(); ctx.arc(x,y, r+12+pulse*8, 0, 7);
+        ctx.strokeStyle = hexA(t.color, 0.12+pulse*0.18); ctx.lineWidth=1.5; ctx.stroke(); }
+      ctx.restore();
+    }
+    drawIcon(x,y,l.type,r, active2||isHover, l);
+    if(isPartyHere(l.id)) drawPartyStar(x, y-r-8, r);
+
+    const showLabel = active2 || isHover || view.scale>1.4;
+    if(showLabel){
+      ctx.globalAlpha = dim?0.22:1;
+      ctx.font='600 13px "Cinzel", serif'; ctx.textAlign='center';
+      ctx.lineWidth=4; ctx.strokeStyle='rgba(1,10,19,.92)';
+      ctx.strokeText(l.name, x, y+r+17);
+      ctx.fillStyle = active2?'#f0e6d2': isHover?'#e8dcc0':'#c8aa6e';
+      ctx.fillText(l.name, x, y+r+17);
+    }
+    ctx.globalAlpha=1;
+  });
+}
+function hexA(hex,a){ const n=parseInt(hex.slice(1),16); return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
+function hashStr(s){ let h=2166136261; for(let i=0;i<s.length;i++){h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return h; }
+
+/* ---------- Метка партии ---------- */
+// Совпадает ли путь партии с текущей картой (navStack)
+function partyOnCurrentMap(){
+  if(!DATA.party) return false;
+  const p=DATA.party.path||[];
+  if(p.length!==navStack.length) return false;
+  return p.every((id,i)=>id===navStack[i]);
+}
+function isPartyHere(locId){ return partyOnCurrentMap() && DATA.party.id===locId; }
+// Нарисовать золотую звезду партии над точкой
+function drawPartyStar(cx, cy, r){
+  const R=Math.max(7, r*0.55), ph=glowPhase;
+  ctx.save();
+  ctx.translate(cx, cy);
+  // мягкое свечение
+  ctx.shadowColor='#f0c75e'; ctx.shadowBlur=12+4*Math.sin(ph);
+  ctx.beginPath();
+  for(let i=0;i<5;i++){
+    const a=-Math.PI/2 + i*2*Math.PI/5, a2=a+Math.PI/5;
+    ctx.lineTo(Math.cos(a)*R, Math.sin(a)*R);
+    ctx.lineTo(Math.cos(a2)*R*0.45, Math.sin(a2)*R*0.45);
+  }
+  ctx.closePath();
+  ctx.fillStyle='#f7d774'; ctx.fill();
+  ctx.lineWidth=1.5; ctx.strokeStyle='#fff4d0'; ctx.stroke();
+  ctx.restore();
+}
+
+/* Проходит ли локация активные фильтры. Пустой набор = критерий не применяется. */
+function passFilter(l){
+  if(filters.types && filters.types.size && !filters.types.has(l.type)) return false;
+  // по полям: для multi — пересечение, для простых — точное совпадение
+  for(const key in filters){
+    if(key==='types') continue;
+    const set=filters[key]; if(!set || !set.size) continue;
+    const schema=fieldsFor(l.type).find(f=>f.key===key);
+    if(schema && schema.multi){
+      const arr=Array.isArray(l[key])?l[key]:[];
+      if(!arr.some(v=>set.has(v))) return false;
+    } else {
+      if(!set.has((l[key]||'').trim())) return false;
+    }
+  }
+  return true;
+}
+function anyFilter(){ let n=0; for(const k in filters) n+=filters[k].size; return n>0; }
+
+/* ---------- Хит-тест ---------- */
+function pick(sx,sy){
+  const m=curr(); const r=Math.max(13,15*Math.min(view.scale,2));
+  for(let i=m.locations.length-1;i>=0;i--){
+    const l=m.locations[i]; if(!passFilter(l)) continue;
+    const [x,y]=toScreen(l.x,l.y);
+    if((sx-x)**2+(sy-y)**2 <= r*r) return l;
+  }
+  return null;
+}
+
+/* ---------- Взаимодействие мышью ---------- */
+let mouse={x:0,y:0}, drag=null, dragLoc=null;
+wrap.addEventListener('mousedown', e=>{
+  const sx=e.offsetX, sy=e.offsetY;
+  const hit=pick(sx,sy);
+
+  if(mode==='add'){
+    const [wx,wy]=toWorld(sx,sy);
+    if(wx<0||wx>1||wy<0||wy>1) return;
+    const id='u'+Date.now();
+    curr().locations.push({id,x:wx,y:wy,type:defaultType(currentLevel()),name:'Новая точка',desc:'',ruler:'',race:'',races:[],alignment:'',religion:''});
+    save(); selectLoc(id); setMode(null); draw();
+    return;
+  }
+  if(hit){
+    dragLoc={ id:hit.id, sx, sy, moved:false };
+    wrap.classList.add('dragging');
+    return;
+  }
+  cancelCam();
+  drag={sx,sy,vx:view.x,vy:view.y,moved:false};
+  wrap.classList.add('dragging');
+});
+window.addEventListener('mousemove', e=>{
+  const rect=wrap.getBoundingClientRect();
+  mouse.x=e.clientX-rect.left; mouse.y=e.clientY-rect.top;
+  if(dragLoc){
+    if(Math.abs(mouse.x-dragLoc.sx)+Math.abs(mouse.y-dragLoc.sy)>3){ dragLoc.moved=true; cancelCam(); }
+    if(dragLoc.moved){
+      const l=locById(dragLoc.id);
+      if(l){ let [wx,wy]=toWorld(mouse.x,mouse.y);
+        l.x=Math.max(0,Math.min(1,wx)); l.y=Math.max(0,Math.min(1,wy)); draw(); }
+    }
+  } else if(drag){ const dx=mouse.x-drag.sx, dy=mouse.y-drag.sy;
+    if(Math.abs(dx)+Math.abs(dy)>3){ drag.moved=true; }
+    view.x=drag.vx+dx; view.y=drag.vy+dy; clampView(); draw();
+  } else {
+    // hover-подсветка
+    const h=pick(mouse.x,mouse.y);
+    const id=h?h.id:null;
+    if(id!==hoverId){ hoverId=id; wrap.style.cursor=id?'pointer':''; draw(); }
+  }
+});
+window.addEventListener('mouseup', ()=>{
+  if(dragLoc){
+    if(dragLoc.moved){ save(); }
+    else { const l=locById(dragLoc.id); selectLoc(dragLoc.id); if(l) flyToLoc(l); } // клик по точке — полёт камеры + панель
+  }
+  // клик по пустому месту панель не открывает (инфо о карте — по крошке-названию сверху)
+  drag=null; dragLoc=null; wrap.classList.remove('dragging');
+});
+
+wrap.addEventListener('dblclick', e=>{
+  const hit=pick(e.offsetX,e.offsetY);
+  if(hit && currentLevel()<3){ enterLocation(hit); }
+});
+
+wrap.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const factor = e.deltaY<0 ? 1.15 : 1/1.15;
+  zoomAt(e.offsetX, e.offsetY, factor);
+}, {passive:false});
+
+/* ---------- Сенсорное управление (мобильные устройства) ---------- */
+let touchState=null, lastTap=0, tapTimer=null;
+function relPt(t){ const r=wrap.getBoundingClientRect(); return { x:t.clientX-r.left, y:t.clientY-r.top }; }
+function touchDist(a,b){ const dx=a.clientX-b.clientX, dy=a.clientY-b.clientY; return Math.hypot(dx,dy); }
+function touchMid(a,b){ const r=wrap.getBoundingClientRect(); return { x:(a.clientX+b.clientX)/2-r.left, y:(a.clientY+b.clientY)/2-r.top }; }
+
+wrap.addEventListener('touchstart', e=>{
+  if(e.touches.length===1){
+    const p=relPt(e.touches[0]);
+    const hit=pick(p.x,p.y);
+    if(mode==='add'){
+      const [wx,wy]=toWorld(p.x,p.y);
+      if(wx>=0&&wx<=1&&wy>=0&&wy<=1){ const id='u'+Date.now();
+        curr().locations.push({id,x:wx,y:wy,type:defaultType(currentLevel()),name:'Новая точка',desc:'',ruler:'',race:'',races:[],alignment:'',religion:''});
+        save(); selectLoc(id); setMode(null); draw(); }
+      touchState=null; return;
+    }
+    if(hit){ touchState={mode:'loc', id:hit.id, sx:p.x, sy:p.y, moved:false}; }
+    else { cancelCam(); touchState={mode:'pan', sx:p.x, sy:p.y, vx:view.x, vy:view.y, moved:false}; }
+  } else if(e.touches.length===2){
+    cancelCam();
+    const d=touchDist(e.touches[0],e.touches[1]);
+    const mid=touchMid(e.touches[0],e.touches[1]);
+    touchState={mode:'pinch', startDist:d, startScale:view.scale, mid};
+  }
+}, {passive:false});
+
+wrap.addEventListener('touchmove', e=>{
+  if(!touchState) return;
+  e.preventDefault();
+  if(touchState.mode==='pinch' && e.touches.length===2){
+    const d=touchDist(e.touches[0],e.touches[1]);
+    const mid=touchMid(e.touches[0],e.touches[1]);
+    const factor=(d/touchState.startDist) * (touchState.startScale/view.scale);
+    zoomAt(mid.x, mid.y, factor);
+  } else if(touchState.mode==='pan' && e.touches.length===1){
+    const p=relPt(e.touches[0]);
+    const dx=p.x-touchState.sx, dy=p.y-touchState.sy;
+    if(Math.abs(dx)+Math.abs(dy)>4) touchState.moved=true;
+    view.x=touchState.vx+dx; view.y=touchState.vy+dy; clampView(); draw();
+  } else if(touchState.mode==='loc' && e.touches.length===1){
+    const p=relPt(e.touches[0]);
+    if(Math.abs(p.x-touchState.sx)+Math.abs(p.y-touchState.sy)>6){ touchState.moved=true; cancelCam();
+      const l=locById(touchState.id);
+      if(l){ let [wx,wy]=toWorld(p.x,p.y); l.x=Math.max(0,Math.min(1,wx)); l.y=Math.max(0,Math.min(1,wy)); draw(); } }
+  }
+}, {passive:false});
+
+wrap.addEventListener('touchend', e=>{
+  if(!touchState){ return; }
+  if(touchState.mode==='loc' && !touchState.moved){
+    const id=touchState.id; const l=locById(id);
+    const now=Date.now();
+    if(now-lastTap<320 && currentLevel()<3 && l){ // двойной тап — вход (если можно глубже)
+      clearTimeout(tapTimer); lastTap=0; enterLocation(l);
+    } else {
+      lastTap=now;
+      selectLoc(id); if(l) flyToLoc(l);
+    }
+  } else if(touchState.mode==='loc' && touchState.moved){
+    save();
+  }
+  touchState=null;
+}, {passive:false});
+
+function zoomAt(sx,sy,factor){
+  cancelCam();
+  const [wx,wy]=toWorld(sx,sy);
+  view.scale=Math.max(0.3,Math.min(12,view.scale*factor));
+  // удержать точку карты под курсором
+  const b=baseRect();
+  const w=b.w*view.scale, h=b.h*view.scale;
+  const ox=(W-w)/2, oy=(H-h)/2;
+  view.x = sx - wx*w - ox;
+  view.y = sy - wy*h - oy;
+  clampView();
+  draw();
+}
+
+// Ограничение смещения, чтобы карта не уезжала полностью за пределы экрана
+function clampView(){
+  const b=baseRect();
+  const w=b.w*view.scale, h=b.h*view.scale;
+  const baseOx=(W-w)/2, baseOy=(H-h)/2;
+  const padX=W*0.25, padY=H*0.25;
+  const minX = (W-padX) - (baseOx + w);
+  const maxX = padX - baseOx;
+  const minY = (H-padY) - (baseOy + h);
+  const maxY = padY - baseOy;
+  if(minX<=maxX) view.x=Math.max(minX,Math.min(maxX,view.x));
+  if(minY<=maxY) view.y=Math.max(minY,Math.min(maxY,view.y));
+}
+
+/* ---------- Плавная камера («полёт» к точке, как в LoL) ---------- */
+function cancelCam(){ camTarget=null; }
+
+// Рассчитать view так, чтобы точка карты (lx,ly) оказалась в заданной точке экрана при масштабе scale
+function viewFor(lx,ly, scale, screenX, screenY){
+  const b=baseRect();
+  const w=b.w*scale, h=b.h*scale;
+  const baseOx=(W-w)/2, baseOy=(H-h)/2;
+  return { x: screenX - lx*w - baseOx, y: screenY - ly*h - baseOy, scale };
+}
+// Полёт камеры к точке локации (учитывая, где находится панель)
+function isMobile(){ return window.innerWidth <= 760; }
+function flyToLoc(l, scale){
+  cancelCam();
+  const sc = scale!==undefined ? scale : Math.max(view.scale, 2.4);
+  let targetX, targetY;
+  if(isMobile()){
+    // панель overlay справа (≤86vw). Целим точку в свободную полосу слева, по вертикали — центр
+    const panelW = Math.min(window.innerWidth*0.86, 360);
+    targetX = Math.max(W*0.28, (W - panelW) * 0.5);
+    targetY = H*0.5;
+  } else {
+    // панель справа (400px): центр видимой области слева от неё
+    targetX = (W - 400) * 0.5;
+    targetY = H*0.5;
+  }
+  const tv = viewFor(l.x, l.y, sc, targetX, targetY);
+  camTarget = tv; camAnim = true;
+  requestAnimationFrame(tick);
+}
+function flyTo(targetView){
+  cancelCam(); camTarget=targetView; camAnim=true; requestAnimationFrame(tick);
+}
+
+let lastT=0;
+function tick(now){
+  if(!camTarget){ camAnim=false; return; }
+  // экспоненциальное сглаживание к цели
+  const k = 0.16;
+  view.x += (camTarget.x - view.x)*k;
+  view.y += (camTarget.y - view.y)*k;
+  view.scale += (camTarget.scale - view.scale)*k;
+  const done = Math.abs(camTarget.x-view.x)<0.5 && Math.abs(camTarget.y-view.y)<0.5 && Math.abs(camTarget.scale-view.scale)<0.002;
+  if(done){ view.x=camTarget.x; view.y=camTarget.y; view.scale=camTarget.scale; camTarget=null; camAnim=false; }
+  draw();
+  if(camTarget) requestAnimationFrame(tick);
+}
+
+/* непрерывная анимация пульсации свечения у выбранной/hover точки */
+function glowLoop(){
+  glowPhase += 0.05;
+  if(selected || hoverId) draw();
+  requestAnimationFrame(glowLoop);
+}
+
+/* ---------- Навигация по уровням ---------- */
+function enterLocation(loc){
+  if(currentLevel()>=3) return;          // глубже 3-го уровня не входим
+  navStack.push(loc.id);
+  currentMap=loc.id; selected=null; hoverId=null;
+  if(!DATA.details[loc.id]) DATA.details[loc.id]={name:loc.name,desc:'',locations:[]};
+  if(DATA.details[loc.id].desc===undefined) DATA.details[loc.id].desc='';
+  clearFilters(); fmExpanded='types';
+  refreshAspect();
+  updateCrumb(); updateLevelUI();
+  closePanel(); renderFilters();
+  view={x:0,y:0,scale:2.2};
+  flyTo({x:0,y:0,scale:1});
+}
+// На один уровень вверх
+function goBack(){
+  if(!navStack.length) return;
+  navStack.pop();
+  currentMap = navStack.length ? navStack[navStack.length-1] : 'world';
+  selected=null; hoverId=null;
+  clearFilters(); fmExpanded='types';
+  refreshAspect();
+  updateCrumb(); updateLevelUI();
+  closePanel(); renderFilters();
+  view={x:0,y:0,scale:1.6};
+  flyTo({x:0,y:0,scale:1});
+}
+// Сразу к миру
+function backToWorld(){
+  navStack=[]; currentMap='world'; selected=null; hoverId=null;
+  clearFilters(); fmExpanded='types';
+  refreshAspect();
+  updateCrumb(); updateLevelUI();
+  closePanel(); renderFilters();
+  view={x:0,y:0,scale:1.6};
+  flyTo({x:0,y:0,scale:1});
+}
+// Показать/скрыть кнопку фильтров (на уровне 1 скрыта) и обновить подсказку добавления
+function updateLevelUI(){
+  // фильтры доступны на всех уровнях (кнопка всегда видна)
+  document.getElementById('filter-btn').style.display = '';
+}
+
+/* ---------- Панель ---------- */
+const panel=document.getElementById('panel');
+function openPanel(){ panel.classList.remove('closed'); }
+function closePanel(){ panel.classList.add('closed'); selected=null; panelMode=null; }
+
+/* --- Панель точки --- */
+function selectLoc(id){
+  selected=id; panelMode='loc'; openPanel(); renderPanel();
+}
+// Заполнить hero-блок: картинка или красивая заглушка с инициалом
+function setHero(imgUrl, initial){
+  const hero=document.getElementById('p-hero');
+  if(imgUrl){ hero.className='panel-hero'; hero.innerHTML='<img src="'+imgUrl+'"><div class="hero-fade"></div>'; }
+  else { hero.className='panel-hero empty'; hero.innerHTML='<span>'+escapeHtml(initial||'◆')+'</span><div class="hero-fade"></div>'; }
+}
+function renderPanel(){
+  const l=locById(selected); if(!l){ closePanel(); return; }
+  const t=TYPES[l.type]||TYPES.village;
+  const heroSrc = l.heroImg || (DATA.images[l.id] ? DATA.images[l.id] : null);
+  setHero(heroSrc, (l.name||'◆').charAt(0).toUpperCase());
+  document.getElementById('p-type').innerHTML='<span class="dot" style="background:'+t.color+'"></span>'+t.name;
+  document.getElementById('p-name').textContent=l.name;
+  const canEnter = currentLevel()<3;
+
+  // блок атрибутов по схеме категории типа (на всех уровнях)
+  const rows=[];
+  const attrRow=(icon,label,val)=> rows.push(
+    '<div class="attr"><div class="attr-ico">'+fieldSVG(icon)+'</div>'+
+    '<div class="attr-text"><div class="attr-label">'+label+'</div><div class="attr-val">'+val+'</div></div></div>');
+  fieldsFor(l.type).forEach(f=>{
+    if(f.multi){
+      const arr=Array.isArray(l[f.key])?l[f.key]:[];
+      if(arr.length) attrRow(f.icon, f.label, arr.map(r=>'<span class="chip-r">'+escapeHtml(r)+'</span>').join(''));
+    } else {
+      const v=(l[f.key]||'').trim();
+      if(v && v!=='—') attrRow(f.icon, f.label, escapeHtml(v));
+    }
+  });
+  const attrs = rows.length ? '<div class="attrs">'+rows.join('')+'</div>' : '';
+
+  // сводка по вложенным локациям (оглавление): если у точки есть детальная карта
+  let inner='';
+  if(canEnter){
+    const d=DATA.details[l.id];
+    const subs=(d && d.locations) ? d.locations : [];
+    if(subs.length){
+      const byType={};
+      subs.forEach(s=>{ byType[s.type]=(byType[s.type]||0)+1; });
+      const chips=Object.entries(byType).map(([tp,n])=>{
+        const tv=TYPES[tp]||{name:tp,color:'#c8aa6e'};
+        return '<span class="sub-chip"><span class="sub-ico" style="color:'+tv.color+'">'+typeSVG(tv.icon)+'</span>'+escapeHtml(tv.name)+' · '+n+'</span>';
+      }).join('');
+      inner='<div class="attr-label" style="margin:14px 0 8px">Внутри ('+subs.length+')</div><div class="sub-list">'+chips+'</div>';
+    }
+  }
+
+  document.getElementById('p-body').innerHTML =
+    attrs +
+    '<p>'+ (l.desc? escapeHtml(l.desc).replace(/\n/g,'<br>') : '<i style="color:var(--parchment-dark)">Описания пока нет.</i>') +'</p>'+
+    inner +
+    (canEnter? '<span class="badge">Двойной клик по точке — войти внутрь</span>':'');
+  const here=isPartyHere(l.id);
+  document.getElementById('p-foot').innerHTML =
+    (canEnter?'<div class="btn gold" id="b-enter">Войти ⤵</div>':'')+
+    '<div class="btn'+(here?' party-on':'')+'" id="b-party">'+(here?'★ Партия здесь':'☆ Партия здесь')+'</div>'+
+    '<div class="btn" id="b-edit">Править</div>';
+  if(canEnter) document.getElementById('b-enter').onclick=()=>enterLocation(l);
+  document.getElementById('b-party').onclick=()=>{
+    if(isPartyHere(l.id)){ DATA.party=null; }
+    else { DATA.party={ path:navStack.slice(), id:l.id }; }
+    save(); renderPanel(); draw(); updatePartyBtn();
+  };
+  document.getElementById('b-edit').onclick=editPanel;
+}
+function editPanel(){
+  const l=locById(selected); if(!l) return;
+  const allowed = allowedTypes(currentLevel()).slice();
+  if(!allowed.includes(l.type)) allowed.unshift(l.type);
+  const opts=allowed.map(k=>{ const v=TYPES[k]||{name:k}; return '<option value="'+k+'"'+(k===l.type?' selected':'')+'>'+v.name+'</option>'; }).join('');
+  document.getElementById('p-name').textContent='Редактирование';
+  document.getElementById('p-type').innerHTML='<span class="dot" style="background:var(--cyan)"></span>Точка';
+
+  // Сгенерировать HTML полей категории для заданного типа
+  function attrsFormFor(type){
+    return fieldsFor(type).map(f=>{
+      if(f.multi){
+        const arr=Array.isArray(l[f.key])?l[f.key]:[];
+        const tags=arr.map((r,i)=>'<span class="race-tag">'+escapeHtml(r)+'<b data-k="'+f.key+'" data-i="'+i+'">×</b></span>').join('');
+        return '<div class="field"><label>'+f.label+'</label>'+
+          '<div class="races-edit" data-list="'+f.key+'">'+tags+'</div>'+
+          '<div class="race-add"><input class="edit" data-newfor="'+f.key+'" placeholder="добавить…"><button type="button" data-addfor="'+f.key+'">+</button></div>'+
+          '</div>';
+      }
+      return '<div class="field"><label>'+f.label+'</label><input class="edit" data-field="'+f.key+'" value="'+escapeHtml(l[f.key]||'')+'"></div>';
+    }).join('');
+  }
+
+  document.getElementById('p-body').innerHTML=
+    '<div class="field"><label>Название</label><input class="edit" id="e-name" value="'+escapeHtml(l.name)+'"></div>'+
+    '<div class="field"><label>Картинка шапки</label>'+
+      (l.heroImg?'<div class="map-preview" style="margin-bottom:8px"><img src="'+l.heroImg+'"></div>':'')+
+      '<div class="btn" id="e-hero-btn" style="flex:none">'+(l.heroImg?'Заменить картинку':'Загрузить картинку')+'</div>'+
+      (l.heroImg?'<div class="btn danger" id="e-hero-clear" style="flex:none;margin-top:6px">Убрать картинку</div>':'')+'</div>'+
+    '<div class="field"><label>Тип</label><select id="e-type">'+opts+'</select></div>'+
+    '<div class="field" id="e-region-wrap" style="display:none"><label>SVG-иконка региона</label>'+
+      '<div class="btn" id="e-svg-btn" style="flex:none">'+(l.iconSvg?'Заменить SVG':'Загрузить SVG')+'</div>'+
+      (l.iconSvg?'<div class="btn danger" id="e-svg-clear" style="flex:none;margin-top:6px">Убрать SVG</div>':'')+'</div>'+
+    '<div id="e-attrs">'+attrsFormFor(l.type)+'</div>'+
+    '<div class="field"><label>Описание</label><textarea id="e-desc">'+escapeHtml(l.desc||'')+'</textarea></div>';
+  document.getElementById('p-foot').innerHTML=
+    '<div class="btn gold" id="b-save">Сохранить</div>'+
+    '<div class="btn danger" id="b-del">Удалить</div>';
+
+  // Считать значения простых полей из формы в объект (чтобы не терять при пересборке)
+  function readSimpleFields(){
+    document.querySelectorAll('#e-attrs input[data-field]').forEach(inp=>{ l[inp.dataset.field]=inp.value.trim(); });
+  }
+  // Навесить обработчики на мульти-поля текущей схемы
+  function bindMulti(){
+    document.querySelectorAll('#e-attrs [data-addfor]').forEach(btn=>{
+      const key=btn.dataset.addfor;
+      const inp=document.querySelector('#e-attrs [data-newfor="'+key+'"]');
+      const add=()=>{ const v=inp.value.trim(); if(v){ if(!Array.isArray(l[key]))l[key]=[]; l[key].push(v); readSimpleFields(); save(); rebuildAttrs(); } };
+      btn.onclick=add;
+      inp.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); add(); }});
+    });
+    document.querySelectorAll('#e-attrs .race-tag b').forEach(b=>{ b.onclick=()=>{ const key=b.dataset.k; l[key].splice(+b.dataset.i,1); readSimpleFields(); save(); rebuildAttrs(); }; });
+  }
+  function rebuildAttrs(){
+    document.getElementById('e-attrs').innerHTML=attrsFormFor(document.getElementById('e-type').value);
+    bindMulti();
+  }
+
+  const typeSel=document.getElementById('e-type');
+  const regionWrap=document.getElementById('e-region-wrap');
+  const sync=()=>{ regionWrap.style.display = typeSel.value==='region' ? '' : 'none'; };
+  typeSel.onchange=()=>{ readSimpleFields(); sync(); rebuildAttrs(); };
+  sync(); bindMulti();
+
+  // загрузка картинки шапки локации
+  const heroBtn=document.getElementById('e-hero-btn');
+  if(heroBtn) heroBtn.onclick=()=>{
+    const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
+    inp.onchange=ev=>{ const f=ev.target.files[0]; if(!f) return;
+      const rd=new FileReader(); rd.onload=()=>{ l.heroImg=rd.result; save(); editPanel(); }; rd.readAsDataURL(f); };
+    inp.click();
+  };
+  const heroClear=document.getElementById('e-hero-clear');
+  if(heroClear) heroClear.onclick=()=>{ delete l.heroImg; save(); editPanel(); };
+
+  // загрузка SVG-иконки региона
+  const svgBtn=document.getElementById('e-svg-btn');
+  if(svgBtn) svgBtn.onclick=()=>{
+    const inp=document.createElement('input'); inp.type='file'; inp.accept='.svg,image/svg+xml';
+    inp.onchange=ev=>{ const f=ev.target.files[0]; if(!f) return;
+      const rd=new FileReader(); rd.onload=()=>{ l.iconSvg=rd.result; delete iconImgCache['custom|'+l.id]; save(); editPanel(); draw(); }; rd.readAsDataURL(f); };
+    inp.click();
+  };
+  const svgClear=document.getElementById('e-svg-clear');
+  if(svgClear) svgClear.onclick=()=>{ delete l.iconSvg; save(); editPanel(); draw(); };
+
+  document.getElementById('b-save').onclick=()=>{
+    l.name=document.getElementById('e-name').value.trim()||'Без названия';
+    l.type=document.getElementById('e-type').value;
+    readSimpleFields();   // мульти-поля уже в объекте
+    l.desc=document.getElementById('e-desc').value.trim();
+    save(); renderFilters(); renderPanel(); draw();
+  };
+  document.getElementById('b-del').onclick=()=>{
+    const m=curr();
+    m.locations=m.locations.filter(x=>x.id!==l.id);
+    if(isPartyHere(l.id)){ DATA.party=null; updatePartyBtn(); }
+    save(); renderFilters(); closePanel(); draw();
+  };
+}
+
+/* --- Панель карты (описание + картинка) --- */
+function openMapPanel(){
+  closeFilterMenu(); selected=null; panelMode='map'; openPanel(); renderMapPanel();
+}
+function renderMapPanel(){
+  const m=curr();
+  const isWorld = currentMap==='world';
+  const hasImg = !!DATA.images[currentMap];
+  setHero(hasImg?DATA.images[currentMap]:null, (m.name||(isWorld?'Мир':'◆')).charAt(0).toUpperCase());
+  document.getElementById('p-type').innerHTML='<span class="dot" style="background:var(--cyan)"></span>'+(isWorld?'Карта мира':'Карта локации');
+  document.getElementById('p-name').textContent=m.name||(isWorld?'Известный мир':'Локация');
+  document.getElementById('p-body').innerHTML =
+    '<p>'+ (m.desc? escapeHtml(m.desc).replace(/\n/g,'<br>') : '<i style="color:var(--parchment-dark)">Описания пока нет.</i>') +'</p>'+
+    (hasImg?'':'<span class="badge">Картинка не загружена — показана сгенерированная карта</span>');
+  document.getElementById('p-foot').innerHTML =
+    '<div class="btn gold" id="b-upload">'+(hasImg?'Заменить':'Загрузить')+'</div>'+
+    '<div class="btn" id="b-medit">Править</div>';
+  document.getElementById('b-upload').onclick=()=>document.getElementById('mapfile').click();
+  document.getElementById('b-medit').onclick=editMapPanel;
+}
+function editMapPanel(){
+  const m=curr();
+  const hasImg = !!DATA.images[currentMap];
+  document.getElementById('p-name').textContent='Редактирование карты';
+  document.getElementById('p-type').innerHTML='<span class="dot" style="background:var(--gold)"></span>Карта';
+  document.getElementById('p-body').innerHTML=
+    '<div class="field"><label>Название карты</label><input class="edit" id="m-name" value="'+escapeHtml(m.name||'')+'"></div>'+
+    '<div class="field"><label>Описание</label><textarea id="m-desc">'+escapeHtml(m.desc||'')+'</textarea></div>'+
+    (hasImg? '<div class="btn danger" id="m-clear" style="flex:none">Убрать картинку (вернуть заглушку)</div>':'');
+  document.getElementById('p-foot').innerHTML=
+    '<div class="btn gold" id="m-save">Сохранить</div>';
+  document.getElementById('m-save').onclick=()=>{
+    m.name=document.getElementById('m-name').value.trim();
+    m.desc=document.getElementById('m-desc').value.trim();
+    save(); renderMapPanel();
+    updateCrumb();   // имя мира или локации в крошках
+  };
+  const clr=document.getElementById('m-clear');
+  if(clr) clr.onclick=()=>{ delete DATA.images[currentMap]; delete imgCache[currentMap]; refreshAspect(); save(); draw(); renderMapPanel(); };
+}
+function isWorldNow(){ return currentMap==='world'; }
+
+function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ---------- Фильтры (выпадающие группы) ---------- */
+let filterOpen = false;
+let fmExpanded = 'types';   // какая группа развёрнута
+
+// Собрать уникальные значения поля по всем локациям текущей карты (учёт multi-полей)
+function collectValues(field){
+  const set=new Set();
+  curr().locations.forEach(l=>{
+    const val=l[field];
+    if(Array.isArray(val)){ val.forEach(v=>{ v=(v||'').trim(); if(v&&v!=='—') set.add(v); }); }
+    else { const v=(val||'').trim(); if(v && v!=='—') set.add(v); }
+  });
+  return [...set].sort((a,b)=>a.localeCompare(b,'ru'));
+}
+
+// Какие поля встречаются среди локаций текущей карты (по их типам) — для групп фильтров
+function activeFieldGroups(){
+  const seen=new Map();   // key -> label (с учётом иконки)
+  curr().locations.forEach(l=>{
+    fieldsFor(l.type).forEach(f=>{ if(!seen.has(f.key)) seen.set(f.key, f); });
+  });
+  return [...seen.values()];
+}
+
+function renderFilters(){
+  const menu=document.getElementById('filter-menu');
+  let groups=[{ key:'types', title:'Локации', isType:true }];
+  // группы по полям, реально присутствующим у локаций текущей карты (на любом уровне)
+  activeFieldGroups().forEach(f=>{ groups.push({ key:f.key, title:f.label, field:f.key }); });
+  let html='<div class="fm-head"><span class="fm-title">Фильтры</span><div class="fm-close" id="fm-close">✕</div></div>';
+  html+='<div class="fm-toggle-all" id="fm-reset">Сбросить все</div>';
+  html+='<div class="fm-scroll">';
+
+  groups.forEach(g=>{
+    const sel=filterSet(g.key);
+    const expanded = fmExpanded===g.key;
+    const badge = sel.size ? '<span class="fm-gcount">'+sel.size+'</span>' : '';
+    html+='<div class="fm-group">';
+    html+='<div class="fm-gh" data-g="'+g.key+'"><span>'+g.title+'</span>'+badge+'<span class="fm-arrow">'+(expanded?'▾':'▸')+'</span></div>';
+    if(expanded){
+      html+='<div class="fm-glist">';
+      if(g.isType){
+        allowedTypes(currentLevel()).forEach(k=>{
+          const v=TYPES[k]; if(!v) return;
+          const on=sel.has(k);
+          html+='<div class="fm-row '+(on?'on':'off')+'" data-cat="types" data-v="'+k+'">'+
+            '<span class="fm-icon" style="color:'+v.color+'">'+typeSVG(v.icon)+'</span>'+
+            '<span class="fm-label">'+v.name+'</span><span class="fm-check"></span></div>';
+        });
+      } else {
+        const vals=collectValues(g.field);
+        if(!vals.length){ html+='<div class="fm-empty">Нет данных — заполните в локациях</div>'; }
+        vals.forEach(v=>{
+          const on=sel.has(v);
+          html+='<div class="fm-row '+(on?'on':'off')+'" data-cat="'+g.key+'" data-v="'+escapeHtml(v)+'">'+
+            '<span class="fm-label">'+escapeHtml(v)+'</span><span class="fm-check"></span></div>';
+        });
+      }
+      html+='</div>';
+    }
+    html+='</div>';
+  });
+  html+='</div>';   // .fm-scroll
+  menu.innerHTML=html;
+
+  document.getElementById('fm-close').onclick=closeFilterMenu;
+
+  // развернуть/свернуть группу
+  menu.querySelectorAll('.fm-gh').forEach(gh=>{
+    gh.onclick=()=>{ const k=gh.dataset.g; fmExpanded = (fmExpanded===k)?null:k; renderFilters(); };
+  });
+  // выбор значения
+  menu.querySelectorAll('.fm-row').forEach(row=>{
+    row.onclick=()=>{
+      const cat=row.dataset.cat, v=row.dataset.v;
+      const set=filterSet(cat);
+      set.has(v)?set.delete(v):set.add(v);
+      renderFilters(); updateFilterBtn(); draw();
+    };
+  });
+  document.getElementById('fm-reset').onclick=()=>{
+    clearFilters();
+    renderFilters(); updateFilterBtn(); draw();
+  };
+  const back=document.getElementById('back-world');
+  if(back) back.style.display = (currentLevel()>1) ? '' : 'none';
+  updateFilterBtn();
+}
+function updateFilterBtn(){
+  let n=0; Object.values(filters).forEach(s=>n+=s.size);
+  const btn=document.getElementById('filter-btn');
+  const cnt=document.getElementById('filter-count');
+  if(n>0){ btn.classList.add('has-active'); cnt.style.display=''; cnt.textContent=n; }
+  else { btn.classList.remove('has-active'); cnt.style.display='none'; }
+}
+function openFilterMenu(){ document.getElementById('filter-menu').classList.remove('hidden'); filterOpen=true; renderFilters(); }
+function closeFilterMenu(){ document.getElementById('filter-menu').classList.add('hidden'); filterOpen=false; }
+document.getElementById('filter-btn').onclick=(e)=>{ e.stopPropagation(); filterOpen?closeFilterMenu():openFilterMenu(); };
+document.addEventListener('click',(e)=>{
+  if(filterOpen && !e.target.closest('#filter-menu') && !e.target.closest('#filter-btn')) closeFilterMenu();
+});
+
+/* ---------- Режимы (добавить / дорога) ---------- */
+function setMode(m){
+  mode=m;
+  document.getElementById('addmode').classList.toggle('active', m==='add');
+  const hint=document.getElementById('hint');
+  if(m==='add') hint.textContent='Кликните на карту, чтобы поставить новый маркер';
+  else hint.textContent='Клик по точке — описание · Название сверху — о карте · Колесо — зум · 2× клик — войти';
+}
+
+/* ---------- Контролы ---------- */
+document.getElementById('zoomin').onclick=()=>zoomAt(W/2,H/2,1.3);
+document.getElementById('zoomout').onclick=()=>zoomAt(W/2,H/2,1/1.3);
+document.getElementById('recenter').onclick=()=>{ flyTo({x:0,y:0,scale:1}); };
+document.getElementById('addmode').onclick=()=>setMode(mode==='add'?null:'add');
+document.getElementById('goparty').onclick=goToParty;
+
+// Показать/скрыть кнопку «К партии» (видна, если метка где-то стоит)
+function updatePartyBtn(){
+  document.getElementById('goparty').style.display = DATA.party ? '' : 'none';
+}
+// Перейти к карте, где стоит метка партии, и навести камеру на точку
+function goToParty(){
+  if(!DATA.party) return;
+  const path=DATA.party.path||[];
+  // перестроить навигацию по сохранённому пути
+  navStack = path.slice();
+  currentMap = navStack.length ? navStack[navStack.length-1] : 'world';
+  clearFilters(); fmExpanded='types';
+  refreshAspect(); updateCrumb(); updateLevelUI(); closeFilterMenu();
+  const l=locById(DATA.party.id);
+  if(l){ selectLoc(DATA.party.id); flyToLoc(l, Math.max(2.4, view.scale)); }
+  else { // точка пропала (удалена) — снимаем метку
+    DATA.party=null; save(); updatePartyBtn(); flyTo({x:0,y:0,scale:1});
+  }
+  draw();
+}
+document.getElementById('search').addEventListener('input',e=>{ searchQ=e.target.value.toLowerCase().trim(); draw(); });
+document.getElementById('panel-close').onclick=closePanel;
+document.getElementById('back-world').onclick=goBack;
+
+/* ---------- Редактируемое название мира ---------- */
+const titleEl=document.getElementById('world-title');
+titleEl.textContent = DATA.title || 'ATLAS';
+titleEl.onclick=()=>{
+  const inp=document.createElement('input');
+  inp.id='title-input'; inp.value=DATA.title||'';
+  inp.maxLength=60;
+  titleEl.replaceWith(inp); inp.focus(); inp.select();
+  const commit=()=>{
+    const v=inp.value.trim()||'ATLAS';
+    DATA.title=v; save();
+    titleEl.textContent=v; inp.replaceWith(titleEl);
+  };
+  inp.addEventListener('keydown',ev=>{
+    if(ev.key==='Enter') commit();
+    if(ev.key==='Escape'){ inp.replaceWith(titleEl); }
+  });
+  inp.addEventListener('blur', commit);
+};
+
+// Скрытый input файла используется панелью карты (см. renderMapPanel)
+document.getElementById('mapfile').addEventListener('change', e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    DATA.images[currentMap]=ev.target.result;   // data-URL
+    delete imgCache[currentMap];                  // сбросить кэш
+    view={x:0,y:0,scale:1};                        // показать новую карту целиком
+    refreshAspect();                               // аспект уточнится в onload картинки
+    save(); draw(); if(panelMode==='map') renderMapPanel();
+  };
+  reader.readAsDataURL(file);
+  e.target.value='';
+});
+
+/* ---------- Старт ---------- */
+renderFilters();
+updateCrumb();
+updateLevelUI();
+updatePartyBtn();
+resize();
+refreshAspect();
+draw();
+glowLoop();
+</script>
+</body>
+</html>
